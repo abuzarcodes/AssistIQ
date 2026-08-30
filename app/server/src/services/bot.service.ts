@@ -3,6 +3,8 @@ import prisma from '../config/database.js';
 import { NotFoundError } from '../utils/errors.js';
 import { getWorkspaceById } from './workspace.service.js';
 import type { CreateBotInput, UpdateBotInput } from '../schemas/bot.schema.js';
+import { aiServiceClient } from './aiServiceClient.js';
+import { logger } from '../config/logger.js';
 
 /**
  * Create a bot under a workspace. Ownership of the parent workspace is asserted first,
@@ -72,4 +74,10 @@ export const updateBot = async (
 export const deleteBot = async (botId: string, ownerId: string): Promise<void> => {
   await getBotById(botId, ownerId);
   await prisma.bot.delete({ where: { id: botId } });
+
+  try {
+    await aiServiceClient.deleteBotKnowledge(botId);
+  } catch (err) {
+    logger.error({ err, botId }, 'Failed to delete knowledge vectors from AI service during bot deletion');
+  }
 };

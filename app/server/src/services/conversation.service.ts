@@ -2,9 +2,8 @@ import type { Conversation, Message } from '@prisma/client';
 import prisma from '../config/database.js';
 import { NotFoundError } from '../utils/errors.js';
 import { getBotById } from './bot.service.js';
-import { generateResponse } from './ai.service.js';
+import { aiServiceClient, type ChatResponse } from './aiServiceClient.js';
 import { MessageRole } from '../constants/roles.js';
-import type { AIResponse } from '../types/common.types.js';
 
 /** Create a conversation under a bot the caller owns. */
 export const createConversation = async (
@@ -66,7 +65,7 @@ const getOwnedConversation = async (
 export interface SendMessageResult {
   userMessage: Message;
   assistantMessage: Message;
-  ai: AIResponse;
+  ai: ChatResponse;
 }
 
 /**
@@ -91,21 +90,20 @@ export const addMessage = async (
     data: { conversationId, role: MessageRole.USER, content },
   });
 
-  const knowledge = await prisma.knowledgeEntry.findMany({
-    where: { botId: conversation.botId },
-    select: { title: true, category: true, question: true, answer: true },
-    take: 100,
+  const ai = await aiServiceClient.chat({
+    bot_id: conversation.botId,
+    message: content,
   });
 
-  const ai = await generateResponse({
-    botId: conversation.botId,
-    conversationId,
-    message: content,
-    knowledge,
-  });
+  if (ai.fallback_required) {
+    await prisma.conversation.update({
+      where: { id: conversationId },
+      data: { status: 'WAITING_FOR_HUMAN' },
+    });
+  }
 
   const assistantMessage = await prisma.message.create({
-    data: { conversationId, role: MessageRole.ASSISTANT, content: ai.answer },
+    data: { conversationId, role: MessageRole.ASSISTANT, content: ai.response },
   });
 
   return { userMessage, assistantMessage, ai };

@@ -36,3 +36,9 @@ export const deleteKnowledge = asyncHandler(async (req: Request, res: Response) 
   await knowledgeService.deleteKnowledge(req.params.knowledgeId, ownerId);
   sendSuccess(res, null, 'Knowledge entry deleted', 200);
 });
+
+export const deleteAllKnowledge = asyncHandler(async (req: Request, res: Response) => {
+  const { id: ownerId } = getAuthUser(req);
+  await knowledgeService.deleteAllKnowledge(req.params.botId, ownerId);
+  sendSuccess(res, null, 'All knowledge entries deleted for bot', 200);
+});

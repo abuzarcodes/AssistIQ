@@ -6,6 +6,7 @@ import workspaceRoutes from './workspace.routes.js';
 import botRoutes from './bot.routes.js';
 import knowledgeRoutes from './knowledge.routes.js';
 import conversationRoutes from './conversation.routes.js';
+import adminAiRoutes from './admin.ai.routes.js';
 
 const router = Router();
 
@@ -19,5 +20,8 @@ router.use('/workspaces', authenticate, workspaceRoutes);
 router.use('/bots', authenticate, botRoutes);
 router.use('/knowledge', authenticate, knowledgeRoutes);
 router.use('/conversations', authenticate, conversationRoutes);
+
+// Protected admin routes for AI testing and operations
+router.use('/admin/ai', authenticate, adminAiRoutes);
 
 export default router;

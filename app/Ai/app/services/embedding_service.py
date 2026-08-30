@@ -12,13 +12,29 @@ class EmbeddingService:
         self.provider = settings.EMBEDDING_PROVIDER.lower()
         self.model_name = settings.EMBEDDING_MODEL
         self.api_key = settings.EMBEDDING_API_KEY
-        self._is_configured = bool(self.api_key and self.api_key.strip())
-        self.dimension = 1536  # Default dimension for text-embedding-3-small
+        
+        if self.provider == "huggingface":
+            self.dimension = 384
+            self._is_configured = True
+        else:
+            self.dimension = settings.EMBEDDING_DIMENSION
+            self._is_configured = bool(self.api_key and self.api_key.strip())
+            
+        self._hf_model = None
 
     @property
     def is_configured(self) -> bool:
         """Check whether valid API credentials exist."""
         return self._is_configured
+        
+    def _get_hf_model(self):
+        """Lazy load HuggingFace sentence transformer."""
+        if self._hf_model is None:
+            from sentence_transformers import SentenceTransformer
+            # We use all-MiniLM-L6-v2 directly if huggingface is selected
+            model_id = self.model_name if self.model_name != "text-embedding-3-small" else "all-MiniLM-L6-v2"
+            self._hf_model = SentenceTransformer(model_id)
+        return self._hf_model
 
     async def embed_text(self, text: str) -> List[float]:
         """Generate vector embedding for a single text string."""
@@ -39,6 +55,11 @@ class EmbeddingService:
                 )
                 res = await embeddings.aembed_query(text)
                 return list(res)
+            elif self.provider == "huggingface":
+                model = self._get_hf_model()
+                # Run synchronously but wrap in list
+                res = model.encode(text)
+                return res.tolist()
             else:
                 return [0.0] * self.dimension
         except Exception as err:
@@ -74,6 +95,10 @@ class EmbeddingService:
                 )
                 res = await embeddings.aembed_documents(texts)
                 return [list(vec) for vec in res]
+            elif self.provider == "huggingface":
+                model = self._get_hf_model()
+                res = model.encode(texts)
+                return [vec.tolist() for vec in res]
             else:
                 return [[0.0] * self.dimension for _ in texts]
         except Exception as err:

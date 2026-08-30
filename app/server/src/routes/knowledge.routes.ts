@@ -24,6 +24,11 @@ knowledgeCreateListRouter.get(
   validate({ params: botIdParamSchema }),
   knowledgeController.listKnowledge
 );
+knowledgeCreateListRouter.delete(
+  '/',
+  validate({ params: botIdParamSchema }),
+  knowledgeController.deleteAllKnowledge
+);
 
 // Top-level /knowledge/:knowledgeId operations.
 const router = Router();

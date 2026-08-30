@@ -79,11 +79,19 @@ model KnowledgeEntry {
   @@map("knowledge_entries")
 }
 
+enum ConversationStatus {
+  ACTIVE
+  WAITING_FOR_HUMAN
+  RESOLVED
+}
+
 model Conversation {
-  id        String   @id @default(uuid())
-  botId     String
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id              String             @id @default(uuid())
+  botId           String
+  status          ConversationStatus @default(ACTIVE)
+  assignedAgentId String?
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 
   bot      Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
   messages Message[]

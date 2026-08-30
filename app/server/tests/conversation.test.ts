@@ -17,10 +17,10 @@ const prismaMock = vi.hoisted(() => ({
 }));
 
 // The AI boundary is mocked so no Python service is required (spec §15, §24).
-const aiMock = vi.hoisted(() => ({ generateResponse: vi.fn() }));
+const aiMock = vi.hoisted(() => ({ chat: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
-vi.mock('../src/services/ai.service.js', () => aiMock);
+vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -80,11 +80,11 @@ describe('POST /api/v1/conversations/:conversationId/messages', () => {
         createdAt: new Date(),
       })
     );
-    aiMock.generateResponse.mockResolvedValue({
+    aiMock.chat.mockResolvedValue({
       answer: 'Mock assistant reply',
       intent: 'faq_match',
       confidence: 0.9,
-      shouldEscalate: false,
+      fallback_required: false,
     });
 
     const res = await request(app)
@@ -100,11 +100,10 @@ describe('POST /api/v1/conversations/:conversationId/messages', () => {
     expect(res.body.data.ai.answer).toBe('Mock assistant reply');
 
     // The AI service was reached through the boundary with the message + bot context.
-    expect(aiMock.generateResponse).toHaveBeenCalledTimes(1);
-    expect(aiMock.generateResponse).toHaveBeenCalledWith(
+    expect(aiMock.chat).toHaveBeenCalledTimes(1);
+    expect(aiMock.chat).toHaveBeenCalledWith(
       expect.objectContaining({
-        botId: BOT_ID,
-        conversationId: CONVERSATION_ID,
+        bot_id: BOT_ID,
         message: 'What are your hours?',
       })
     );
@@ -121,7 +120,7 @@ describe('POST /api/v1/conversations/:conversationId/messages', () => {
       .send({ content: 'Let me in' });
 
     expect(res.status).toBe(404);
-    expect(aiMock.generateResponse).not.toHaveBeenCalled();
+    expect(aiMock.chat).not.toHaveBeenCalled();
     expect(prismaMock.message.create).not.toHaveBeenCalled();
   });
 
@@ -132,6 +131,6 @@ describe('POST /api/v1/conversations/:conversationId/messages', () => {
       .send({ content: '' });
 
     expect(res.status).toBe(400);
-    expect(aiMock.generateResponse).not.toHaveBeenCalled();
+    expect(aiMock.chat).not.toHaveBeenCalled();
   });
 });

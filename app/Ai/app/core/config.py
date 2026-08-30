@@ -17,14 +17,24 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = "openai"
     LLM_MODEL: str = "gpt-4o-mini"
     LLM_API_KEY: str = ""
+    
+    # Grok Configuration
+    GROK_API_KEY: str = ""
+    GROK_MODEL: str = "grok-3-mini"
+    
+    # Gemini Configuration
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.0-flash"
 
     # Embedding Provider Configuration
     EMBEDDING_PROVIDER: str = "openai"
     EMBEDDING_MODEL: str = "text-embedding-3-small"
     EMBEDDING_API_KEY: str = ""
+    EMBEDDING_DIMENSION: int = 1536  # Default dimension for openai. 384 for huggingface.
 
     # Database Configuration (PostgreSQL + pgvector)
     DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/assistiq"
+    VECTOR_STORE_TABLE: str = "knowledge_chunks"
 
     # Redis Cache & Queue Configuration
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -32,6 +42,14 @@ class Settings(BaseSettings):
     # Express Backend Communication
     EXPRESS_BACKEND_URL: str = "http://localhost:5000"
     INTERNAL_API_KEY: str = "dev_internal_secret_key"
+    
+    # AI Pipeline Thresholds
+    CLASSIFICATION_CONFIDENCE_THRESHOLD: float = 0.60
+    RETRIEVAL_CONFIDENCE_THRESHOLD: float = 0.65
+    
+    # Chunking Configuration
+    CHUNK_SIZE: int = 800
+    CHUNK_OVERLAP: int = 100
 
     model_config = SettingsConfigDict(
         env_file=".env",

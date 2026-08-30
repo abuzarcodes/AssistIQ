@@ -10,8 +10,17 @@ class LLMService:
 
     def __init__(self) -> None:
         self.provider = settings.LLM_PROVIDER.lower()
-        self.model_name = settings.LLM_MODEL
-        self.api_key = settings.LLM_API_KEY
+        
+        if self.provider == "gemini":
+            self.model_name = settings.GEMINI_MODEL
+            self.api_key = settings.GEMINI_API_KEY
+        elif self.provider == "grok":
+            self.model_name = settings.GROK_MODEL
+            self.api_key = settings.GROK_API_KEY
+        else:
+            self.model_name = settings.LLM_MODEL
+            self.api_key = settings.LLM_API_KEY
+            
         self._is_configured = bool(self.api_key and self.api_key.strip())
 
     @property
@@ -23,7 +32,7 @@ class LLMService:
         self,
         prompt: str,
         system_message: Optional[str] = None,
-        temperature: float = 0.7,
+        temperature: float = 0.0,
     ) -> str:
         """Generate response from configured LLM provider or fallback mock response."""
         if not self.is_configured:
@@ -33,19 +42,18 @@ class LLMService:
             )
             return (
                 f"[Placeholder AI Response] Mock response for question: '{prompt}'. "
-                "(Set LLM_API_KEY in .env to connect to live LLM provider)."
+                "(Set LLM API Key in .env to connect to live LLM provider)."
             )
 
         try:
+            from langchain_core.messages import HumanMessage, SystemMessage
+            messages = []
+            if system_message:
+                messages.append(SystemMessage(content=system_message))
+            messages.append(HumanMessage(content=prompt))
+
             if self.provider == "openai":
                 from langchain_openai import ChatOpenAI
-                from langchain_core.messages import HumanMessage, SystemMessage
-
-                messages = []
-                if system_message:
-                    messages.append(SystemMessage(content=system_message))
-                messages.append(HumanMessage(content=prompt))
-
                 chat = ChatOpenAI(
                     model=self.model_name,
                     api_key=self.api_key,
@@ -53,6 +61,28 @@ class LLMService:
                 )
                 response = await chat.ainvoke(messages)
                 return str(response.content)
+                
+            elif self.provider == "grok":
+                from langchain_openai import ChatOpenAI
+                chat = ChatOpenAI(
+                    base_url="https://api.x.ai/v1",
+                    model=self.model_name,
+                    api_key=self.api_key,
+                    temperature=temperature,
+                )
+                response = await chat.ainvoke(messages)
+                return str(response.content)
+                
+            elif self.provider == "gemini":
+                from langchain_google_genai import ChatGoogleGenerativeAI
+                chat = ChatGoogleGenerativeAI(
+                    model=self.model_name,
+                    google_api_key=self.api_key,
+                    temperature=temperature,
+                )
+                response = await chat.ainvoke(messages)
+                return str(response.content)
+                
             else:
                 return f"[Placeholder AI Response] Unsupported LLM provider '{self.provider}'."
 

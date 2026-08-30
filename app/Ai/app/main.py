@@ -7,9 +7,17 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.core.logging import logger, format_log_context
 from app.core.exceptions import register_exception_handlers
-from app.api.routes.health import router as health_router
-from app.api.routes.ai import router as ai_router
-
+from app.api.routes import (
+    health_router,
+    ai_router,
+    classifier_router,
+    knowledge_router,
+    rag_router,
+    chat_router,
+    testing_router
+)
+from app.services.vector_store_service import get_vector_store_service
+from app.ml.intent.predict import get_intent_model
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -22,7 +30,22 @@ async def lifespan(app: FastAPI):
             version="0.1.0",
         ),
     )
+    
+    # Initialize Vector DB
+    vector_store = get_vector_store_service()
+    try:
+        await vector_store.connect()
+    except Exception as e:
+        logger.error(f"Could not connect to Vector DB during startup: {e}")
+        
+    # Preload ML Model
+    get_intent_model()
+    
     yield
+    
+    # Shutdown Vector DB
+    await vector_store.disconnect()
+    
     logger.info(
         "Shutting down AssistIQ AI Service",
         extra=format_log_context(operation="shutdown"),
@@ -57,6 +80,11 @@ def create_app() -> FastAPI:
 
     # Register Versioned API Routers under /api/v1
     app.include_router(ai_router, prefix="/api/v1")
+    app.include_router(classifier_router, prefix="/api/v1")
+    app.include_router(knowledge_router, prefix="/api/v1")
+    app.include_router(rag_router, prefix="/api/v1")
+    app.include_router(chat_router, prefix="/api/v1")
+    app.include_router(testing_router, prefix="/api/v1")
 
     return app
 

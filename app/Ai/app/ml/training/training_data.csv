@@ -1,0 +1,71 @@
+text,label
+How much does the Pro plan cost?,PRICING
+What is the price of the premium plan?,PRICING
+Do you have a free plan?,PRICING
+What are the differences between free and pro?,PRICING
+Is there an enterprise tier?,PRICING
+How much is it per month?,PRICING
+Can I pay annually for a discount?,PRICING
+Are there hidden fees?,PRICING
+What does the standard package cost?,PRICING
+Do you offer student discounts?,PRICING
+I forgot my password,ACCOUNT
+How can I reset my password?,ACCOUNT
+I cannot access my account,ACCOUNT
+My account is locked,ACCOUNT
+I lost my 2FA backup codes,ACCOUNT
+How do I change my email address?,ACCOUNT
+Can I merge two accounts?,ACCOUNT
+Where do I update my profile picture?,ACCOUNT
+How do I delete my account?,ACCOUNT
+Can I transfer ownership of this workspace?,ACCOUNT
+Can I get a refund?,REFUND
+I want my money back,REFUND
+How does the refund policy work?,REFUND
+I was charged but I want to cancel and refund,REFUND
+When will the money reach my bank?,REFUND
+My refund hasn't arrived yet,REFUND
+Can you refund my last invoice?,REFUND
+"I accidentally bought the wrong plan, refund please",REFUND
+How many days do I have to ask for a refund?,REFUND
+Is the setup fee refundable?,REFUND
+Where can I find my invoice?,BILLING
+Why was my credit card declined?,BILLING
+I need to update my payment method,BILLING
+Do you accept PayPal?,BILLING
+Can I pay via bank transfer?,BILLING
+Why did I get charged twice?,BILLING
+I need a VAT receipt for my company,BILLING
+How do I change my billing address?,BILLING
+Will I be charged automatically next month?,BILLING
+Is the transaction secure?,BILLING
+How do I cancel my subscription?,SUBSCRIPTION
+I want to upgrade to Pro,SUBSCRIPTION
+Can I downgrade my plan?,SUBSCRIPTION
+How do I pause my subscription?,SUBSCRIPTION
+When does my current plan expire?,SUBSCRIPTION
+Will I lose data if I downgrade?,SUBSCRIPTION
+How do I renew my subscription?,SUBSCRIPTION
+Is it possible to switch to annual billing?,SUBSCRIPTION
+Can I add more seats to my subscription?,SUBSCRIPTION
+What happens when my trial ends?,SUBSCRIPTION
+The app keeps crashing,TECHNICAL_SUPPORT
+I am getting a 500 internal server error,TECHNICAL_SUPPORT
+The website is down,TECHNICAL_SUPPORT
+Why is the dashboard so slow today?,TECHNICAL_SUPPORT
+My API requests are failing,TECHNICAL_SUPPORT
+How do I fix the CORS error?,TECHNICAL_SUPPORT
+The integrations page won't load,TECHNICAL_SUPPORT
+I can't upload files,TECHNICAL_SUPPORT
+Is there a bug with the export feature?,TECHNICAL_SUPPORT
+The mobile app doesn't sync,TECHNICAL_SUPPORT
+How do I use the dashboard?,GENERAL_SUPPORT
+Where is the documentation?,GENERAL_SUPPORT
+Can I talk to a human?,GENERAL_SUPPORT
+Do you have a tutorial video?,GENERAL_SUPPORT
+What features are coming next?,GENERAL_SUPPORT
+How do I get started?,GENERAL_SUPPORT
+Is there a community forum?,GENERAL_SUPPORT
+Can someone help me set this up?,GENERAL_SUPPORT
+What time are your support hours?,GENERAL_SUPPORT
+Do you offer onboarding sessions?,GENERAL_SUPPORT
