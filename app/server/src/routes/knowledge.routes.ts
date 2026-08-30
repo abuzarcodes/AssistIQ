@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import multer from 'multer';
 import { validate } from '../middleware/validation.middleware.js';
 import { botIdParamSchema } from '../schemas/bot.schema.js';
 import {
@@ -7,6 +8,23 @@ import {
   knowledgeIdParamSchema,
 } from '../schemas/knowledge.schema.js';
 import * as knowledgeController from '../controllers/knowledge.controller.js';
+
+// Multer config: memory storage, 10 MB limit, PDF/DOCX only
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) => {
+    const allowed = [
+      'application/pdf',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    ];
+    if (allowed.includes(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF and DOCX files are allowed.'));
+    }
+  },
+});
 
 /**
  * Nested under /bots/:botId/knowledge (mergeParams exposes :botId). Mounted by
@@ -28,6 +46,11 @@ knowledgeCreateListRouter.delete(
   '/',
   validate({ params: botIdParamSchema }),
   knowledgeController.deleteAllKnowledge
+);
+knowledgeCreateListRouter.post(
+  '/upload-document',
+  upload.single('file'),
+  knowledgeController.uploadDocument
 );
 
 // Top-level /knowledge/:knowledgeId operations.

@@ -27,3 +27,14 @@ class KnowledgeIngestResponse(BaseModel):
     entries_processed: int = Field(..., description="Number of entries processed")
     chunks_created: int = Field(..., description="Number of vector chunks created")
     status: str = Field(..., description="Ingestion status (e.g., 'completed')")
+
+
+class DocumentIngestResponse(BaseModel):
+    """Response payload for document file ingestion."""
+
+    success: bool = Field(..., description="Success flag")
+    bot_id: str = Field(..., description="Tenant bot ID")
+    filename: str = Field(..., description="Original uploaded filename")
+    pages_extracted: int = Field(..., description="Number of pages/paragraphs extracted")
+    chunks_created: int = Field(..., description="Number of vector chunks created")
+    status: str = Field(..., description="Ingestion status (e.g., 'completed')")

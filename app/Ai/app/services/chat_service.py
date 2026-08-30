@@ -71,10 +71,6 @@ class ChatService:
             fallback_res = self.fallback.get_fallback(FALLBACK_REASON_NO_RELEVANT_KNOWLEDGE, bot_id)
             return self._build_response(fallback_res, classification_result, rag_result, debug_info)
             
-        if not rag_result["is_confident"]:
-            fallback_res = self.fallback.get_fallback(FALLBACK_REASON_LOW_RETRIEVAL_CONFIDENCE, bot_id)
-            return self._build_response(fallback_res, classification_result, rag_result, debug_info)
-            
         # 4. Generate
         context_str = "\n\n".join([f"[{res['topic']}] {res['content']}" for res in rag_result["results"]])
         system_msg = get_support_system_prompt()

@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     
     # Gemini Configuration
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-2.0-flash"
+    GEMINI_MODEL: str = "gemini-3.6-flash"
 
     # Embedding Provider Configuration
     EMBEDDING_PROVIDER: str = "openai"
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     
     # AI Pipeline Thresholds
     CLASSIFICATION_CONFIDENCE_THRESHOLD: float = 0.60
-    RETRIEVAL_CONFIDENCE_THRESHOLD: float = 0.65
+    RETRIEVAL_CONFIDENCE_THRESHOLD: float = 0.20
     
     # Chunking Configuration
     CHUNK_SIZE: int = 800

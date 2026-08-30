@@ -159,6 +159,46 @@ class AIServiceClient {
       body: JSON.stringify(payload),
     });
   }
+
+  /**
+   * Forward a FormData (multipart) request to the AI service.
+   * Does NOT set Content-Type so fetch auto-generates the multipart boundary.
+   */
+  private async requestFormData<T>(endpoint: string, formData: FormData): Promise<T> {
+    const url = `${this.baseUrl}${endpoint}`;
+
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        body: formData,
+        signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS * 3), // longer timeout for file uploads
+      });
+
+      if (!response.ok) {
+        let errorMsg = `AI service responded with status ${response.status}`;
+        try {
+          const errorBody = await response.json() as { detail?: any };
+          if (errorBody && errorBody.detail) {
+            errorMsg += `: ${typeof errorBody.detail === 'string' ? errorBody.detail : JSON.stringify(errorBody.detail)}`;
+          }
+        } catch (e) {
+          // ignore json parse error
+        }
+        logger.error({ status: response.status, url }, 'AI Service FormData Error');
+        throw new Error(errorMsg);
+      }
+
+      return (await response.json()) as T;
+    } catch (error) {
+      logger.error({ err: error, url }, 'AI service FormData communication failed');
+      if (error instanceof AppError) throw error;
+      throw new AppError('The AI service is currently unavailable. Please try again later.', 502);
+    }
+  }
+
+  public async ingestDocument(formData: FormData): Promise<any> {
+    return this.requestFormData<any>('/api/v1/knowledge/ingest-document', formData);
+  }
 }
 
 export const aiServiceClient = new AIServiceClient();

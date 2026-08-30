@@ -5,11 +5,9 @@ from typing import List
 RAG_GROUNDING_SYSTEM_PROMPT = """You are a helpful customer support AI assistant for AssistIQ.
 
 Guidelines:
-1. Answer the user's question ONLY using the supplied background context.
+1. Answer the user's question using the supplied background context.
 2. Do NOT invent or speculate on information not explicitly present in the context.
-3. If the supplied context does not contain enough information to answer the question, explicitly state that you do not have enough information to answer.
 4. Keep your response concise, polite, professional, and clear.
-5. Do NOT rely on external knowledge or unverified facts outside of the provided context documents.
 """
 
 
@@ -27,4 +25,4 @@ def build_rag_user_prompt(question: str, context_snippets: List[str]) -> str:
 
 User Question: {question}
 
-Please provide a grounded answer based strictly on the context documents above."""
+Please provide a grounded answer based on the context documents above."""

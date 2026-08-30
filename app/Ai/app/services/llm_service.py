@@ -60,7 +60,10 @@ class LLMService:
                     temperature=temperature,
                 )
                 response = await chat.ainvoke(messages)
-                return str(response.content)
+                content = response.content
+                if isinstance(content, list):
+                    return "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+                return str(content)
                 
             elif self.provider == "grok":
                 from langchain_openai import ChatOpenAI
@@ -71,7 +74,10 @@ class LLMService:
                     temperature=temperature,
                 )
                 response = await chat.ainvoke(messages)
-                return str(response.content)
+                content = response.content
+                if isinstance(content, list):
+                    return "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+                return str(content)
                 
             elif self.provider == "gemini":
                 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -81,7 +87,10 @@ class LLMService:
                     temperature=temperature,
                 )
                 response = await chat.ainvoke(messages)
-                return str(response.content)
+                content = response.content
+                if isinstance(content, list):
+                    return "".join(part.get("text", "") if isinstance(part, dict) else str(part) for part in content)
+                return str(content)
                 
             else:
                 return f"[Placeholder AI Response] Unsupported LLM provider '{self.provider}'."
