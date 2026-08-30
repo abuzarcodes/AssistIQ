@@ -1,0 +1,24 @@
+# Local PostgreSQL for AssistIQ development.
+# Usage: `docker compose up -d`  (matches DATABASE_URL in .env / .env.example)
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: assistiq-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: assistiq_db
+    ports:
+      - '5432:5432'
+    volumes:
+      - assistiq_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d assistiq_db']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  assistiq_pgdata:

@@ -1,0 +1,106 @@
+// AssistIQ — Prisma schema (PostgreSQL)
+// Multi-tenant support SaaS: User -> Workspace -> Bot -> Knowledge / Conversation -> Message
+// Docs: `npx prisma migrate dev` (create + apply migration), `npx prisma generate` (client).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+/// Roles a chat message can take. The Python AI service will only ever produce ASSISTANT
+/// messages; SYSTEM is reserved for future prompt/handoff bookkeeping.
+enum MessageRole {
+  USER
+  ASSISTANT
+  SYSTEM
+}
+
+model User {
+  id           String   @id @default(uuid())
+  name         String
+  email        String   @unique
+  passwordHash String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // A user owns one or more workspaces (Review 1 uses a single-owner model).
+  workspaces Workspace[]
+
+  @@map("users")
+}
+
+model Workspace {
+  id        String   @id @default(uuid())
+  name      String
+  ownerId   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  bots  Bot[]
+
+  @@index([ownerId])
+  @@map("workspaces")
+}
+
+model Bot {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  workspaceId String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  knowledge     KnowledgeEntry[]
+  conversations Conversation[]
+
+  @@index([workspaceId])
+  @@map("bots")
+}
+
+model KnowledgeEntry {
+  id        String   @id @default(uuid())
+  title     String?
+  category  String?
+  question  String
+  answer    String
+  botId     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@map("knowledge_entries")
+}
+
+model Conversation {
+  id        String   @id @default(uuid())
+  botId     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot      Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([botId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String      @id @default(uuid())
+  conversationId String
+  role           MessageRole
+  content        String
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("messages")
+}
