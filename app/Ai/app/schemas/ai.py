@@ -32,6 +32,29 @@ class AIChatResponse(BaseModel):
     sources: List[SourceDocument] = Field(default_factory=list, description="List of context sources used")
 
 
+class ProviderAdapterStatus(BaseModel):
+    """Configuration state of one registered provider adapter.
+
+    Two independent facts, and the distinction between them is the whole point:
+
+    * the adapter **exists** — it is present in this list because it is registered;
+    * `configured` — a credential is present for it.
+
+    Neither is a reachability measurement. This endpoint reports configuration only and
+    never contacts a provider, so a provider that is configured, reachable and *broken*
+    still reads `configured: true`. Node combines the two facts into the platform
+    dashboard's two readiness badges.
+
+    `configured` is a **boolean and nothing else**. Not the key, not a prefix or suffix
+    of it, not its length, not the base URL — a boolean is the entire disclosure. Adding
+    any other field here would leak credential state through a route whose response is
+    rendered in a browser.
+    """
+
+    slug: str = Field(..., description="Provider slug, matching the catalog's provider slug")
+    configured: bool = Field(..., description="Whether a credential is present for this provider")
+
+
 class AIStatusResponse(BaseModel):
     """Status overview response for AI service health and configured models."""
 
@@ -41,3 +64,10 @@ class AIStatusResponse(BaseModel):
     llm_configured: bool = Field(..., description="Whether LLM credentials are setup")
     embedding_provider: str = Field(..., description="Configured Embedding provider name")
     embedding_configured: bool = Field(..., description="Whether Embedding credentials are setup")
+    provider_adapters: List[ProviderAdapterStatus] = Field(
+        default_factory=list,
+        description=(
+            "Every registered provider adapter and whether its credential is present. "
+            "Additive: a client that ignores this field sees the pre-existing response."
+        ),
+    )

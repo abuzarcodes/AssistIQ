@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import request from 'supertest';
 
 /**
- * Checkpoint 8 — Security and regression testing.
+ * Checkpoint 8 — Security and regression testing. Extended in Checkpoint 9 to cover the AI
+ * catalog routes, so the new surface is swept by the same table rather than by a suite of
+ * its own that could quietly drift from it.
  *
  * A table-driven sweep of the **real route table** (not a synthetic app), asserting the
  * authorization outcome of every workspace-scoped route for every role, plus the platform
@@ -67,6 +69,14 @@ const prismaMock = vi.hoisted(() => ({
     count: vi.fn(),
   },
   message: { create: vi.fn() },
+  aIProvider: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+  aIModel: {
+    findMany: vi.fn(),
+    findUnique: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
 }));
 
 // The AI boundary is mocked: this suite is about authorization, and no Python service
@@ -92,6 +102,8 @@ const BOT_ID = '22222222-2222-2222-2222-222222222222';
 const CONVERSATION_ID = '33333333-3333-3333-3333-333333333333';
 const KNOWLEDGE_ID = '44444444-4444-4444-4444-444444444444';
 const MEMBER_ID = '55555555-5555-5555-5555-555555555555';
+const MODEL_ID = '66666666-6666-6666-6666-666666666666';
+const PROVIDER_ID = '77777777-7777-7777-7777-777777777777';
 
 const authHeader = (): string => `Bearer ${signToken({ sub: USER.id, email: USER.email })}`;
 
@@ -119,6 +131,36 @@ const BOT_ROW = {
   workspaceId: WORKSPACE_ID,
   createdAt: new Date(),
   updatedAt: new Date(),
+};
+
+/**
+ * The shape `aiCatalogService` selects for a provider — every field `toProviderView`
+ * destructures, including the `models` relation its counts are derived from. A partial row
+ * here would throw inside the view mapper and surface as a 500, which the sweep would
+ * report as a missing platform-owner case rather than as the fixture bug it is.
+ */
+const PROVIDER_ROW = {
+  id: PROVIDER_ID,
+  slug: 'openrouter',
+  name: 'OpenRouter',
+  description: null,
+  enabled: false,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  models: [],
+};
+
+/** Likewise for a model: `toModelView` needs `_count` and the provider summary. */
+const MODEL_ROW = {
+  id: MODEL_ID,
+  providerId: PROVIDER_ID,
+  providerModelId: 'openai/gpt-4o-mini',
+  displayName: 'GPT-4o mini',
+  enabled: false,
+  createdAt: new Date(),
+  updatedAt: new Date(),
+  provider: { id: PROVIDER_ID, slug: 'openrouter', name: 'OpenRouter', enabled: true },
+  _count: { bots: 0 },
 };
 
 /**
@@ -155,6 +197,10 @@ const writeMocks = (): ReturnType<typeof vi.fn>[] => [
   prismaMock.conversation.create,
   prismaMock.conversation.update,
   prismaMock.message.create,
+  prismaMock.aIProvider.update,
+  prismaMock.aIModel.create,
+  prismaMock.aIModel.update,
+  prismaMock.aIModel.delete,
 ];
 
 const expectNoWrites = (): void => {
@@ -293,6 +339,34 @@ describe('bot routes — top level (bot scope)', () => {
   it.each(cases)('$label', expectCase);
 });
 
+describe('bot model assignment (Checkpoint 3)', () => {
+  const cases: Case[] = [
+    { label: 'OWNER assigns a model to a bot (bots:manage)', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'OWNER', expect: 200, body: { aiModelId: MODEL_ID }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.aIModel.findUnique.mockResolvedValue({ id: MODEL_ID, enabled: true, provider: { enabled: true } }); prismaMock.bot.update.mockResolvedValue(BOT_ROW); } },
+    { label: 'ADMIN assigns a model to a bot', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'ADMIN', expect: 200, body: { aiModelId: MODEL_ID }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.aIModel.findUnique.mockResolvedValue({ id: MODEL_ID, enabled: true, provider: { enabled: true } }); prismaMock.bot.update.mockResolvedValue(BOT_ROW); } },
+    { label: 'OWNER clears a model assignment with null', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'OWNER', expect: 200, body: { aiModelId: null }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.bot.update.mockResolvedValue(BOT_ROW); } },
+
+    // AGENT holds neither bots:manage nor bots:view, so the model selector must be closed
+    // to it entirely — and, per invariant 2, the denial must write nothing.
+    { label: 'AGENT cannot assign a model → 403', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'AGENT', expect: 403, body: { aiModelId: MODEL_ID } },
+    { label: 'a non-member assigning a model gets 404', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'NON_MEMBER', expect: 404, body: { aiModelId: MODEL_ID } },
+    { label: 'a PLATFORM_OWNER with no membership gets 404 — the platform role grants nothing here', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'PLATFORM_OWNER', expect: 404, body: { aiModelId: MODEL_ID } },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
+describe('workspace AI catalog route (Checkpoint 3)', () => {
+  const cases: Case[] = [
+    // Deliberately authenticated-but-unscoped: the list of enabled models is identical for
+    // every caller and carries no tenant data.
+    { label: 'AGENT can read the model catalog — it is not tenant data', method: 'get', path: '/api/v1/ai/models', as: 'AGENT', expect: 200, prime: () => prismaMock.aIModel.findMany.mockResolvedValue([]) },
+    { label: 'OWNER reads the model catalog', method: 'get', path: '/api/v1/ai/models', as: 'OWNER', expect: 200, prime: () => prismaMock.aIModel.findMany.mockResolvedValue([]) },
+    { label: 'a non-member still reads the catalog — it is global, not per-tenant', method: 'get', path: '/api/v1/ai/models', as: 'NON_MEMBER', expect: 200, prime: () => prismaMock.aIModel.findMany.mockResolvedValue([]) },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
 describe('knowledge routes', () => {
   const cases: Case[] = [
     { label: 'OWNER lists knowledge (knowledge:view)', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge`, as: 'OWNER', expect: 200, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.knowledgeEntry.findMany.mockResolvedValue([]); } },
@@ -356,6 +430,31 @@ describe('platform routes are platform-owner only', () => {
 
     { label: 'AGENT gets 403 on /platform/system', method: 'get', path: '/api/v1/platform/system', as: 'AGENT', expect: 403 },
     { label: 'PLATFORM_OWNER reads system status', method: 'get', path: '/api/v1/platform/system', as: 'PLATFORM_OWNER', expect: 200, prime: () => { prismaMock.user.count.mockResolvedValue(1); prismaMock.workspace.count.mockResolvedValue(1); prismaMock.bot.count.mockResolvedValue(0); prismaMock.conversation.count.mockResolvedValue(0); aiMock.getSystemStatus.mockResolvedValue({ status: 'ok' }); } },
+
+    // --- AI catalog (Checkpoint 2). Added in Checkpoint 9 so the new surface is swept by
+    // the same table as everything else. These routes sit behind the /platform namespace
+    // guard, so a workspace role must be exactly as powerless here as it is on /platform/users.
+    // The workspace identities below are all *members of a workspace* — the point is that
+    // membership buys nothing in the platform domain.
+
+    { label: 'OWNER gets 403 on /platform/providers', method: 'get', path: '/api/v1/platform/providers', as: 'OWNER', expect: 403 },
+    { label: 'ADMIN gets 403 on /platform/providers', method: 'get', path: '/api/v1/platform/providers', as: 'ADMIN', expect: 403 },
+    { label: 'PLATFORM_OWNER lists providers', method: 'get', path: '/api/v1/platform/providers', as: 'PLATFORM_OWNER', expect: 200, prime: () => prismaMock.aIProvider.findMany.mockResolvedValue([PROVIDER_ROW]) },
+
+    { label: 'OWNER gets 403 on PATCH /platform/providers', method: 'patch', path: `/api/v1/platform/providers/${PROVIDER_ID}`, as: 'OWNER', expect: 403, body: { enabled: true } },
+    { label: 'PLATFORM_OWNER updates a provider', method: 'patch', path: `/api/v1/platform/providers/${PROVIDER_ID}`, as: 'PLATFORM_OWNER', expect: 200, body: { enabled: true }, prime: () => { prismaMock.aIProvider.findUnique.mockResolvedValue({ id: PROVIDER_ID }); prismaMock.aIProvider.update.mockResolvedValue(PROVIDER_ROW); } },
+
+    { label: 'ADMIN gets 403 on /platform/models', method: 'get', path: '/api/v1/platform/models', as: 'ADMIN', expect: 403 },
+    { label: 'PLATFORM_OWNER lists models', method: 'get', path: '/api/v1/platform/models', as: 'PLATFORM_OWNER', expect: 200, prime: () => prismaMock.aIModel.findMany.mockResolvedValue([MODEL_ROW]) },
+
+    { label: 'AGENT gets 403 on POST /platform/models', method: 'post', path: '/api/v1/platform/models', as: 'AGENT', expect: 403, body: { providerId: PROVIDER_ID, providerModelId: 'openai/gpt-4o-mini', displayName: 'GPT-4o mini' } },
+    { label: 'PLATFORM_OWNER creates a model', method: 'post', path: '/api/v1/platform/models', as: 'PLATFORM_OWNER', expect: 201, body: { providerId: PROVIDER_ID, providerModelId: 'openai/gpt-4o-mini', displayName: 'GPT-4o mini' }, prime: () => { prismaMock.aIProvider.findUnique.mockResolvedValue({ id: PROVIDER_ID }); prismaMock.aIModel.findUnique.mockResolvedValue(null); prismaMock.aIModel.create.mockResolvedValue(MODEL_ROW); } },
+
+    { label: 'OWNER gets 403 on PATCH /platform/models', method: 'patch', path: `/api/v1/platform/models/${MODEL_ID}`, as: 'OWNER', expect: 403, body: { enabled: true } },
+    { label: 'PLATFORM_OWNER updates a model', method: 'patch', path: `/api/v1/platform/models/${MODEL_ID}`, as: 'PLATFORM_OWNER', expect: 200, body: { enabled: true }, prime: () => { prismaMock.aIModel.findUnique.mockResolvedValue({ id: MODEL_ID }); prismaMock.aIModel.update.mockResolvedValue(MODEL_ROW); } },
+
+    { label: 'AGENT gets 403 on DELETE /platform/models', method: 'delete', path: `/api/v1/platform/models/${MODEL_ID}`, as: 'AGENT', expect: 403 },
+    { label: 'PLATFORM_OWNER deletes an unreferenced model', method: 'delete', path: `/api/v1/platform/models/${MODEL_ID}`, as: 'PLATFORM_OWNER', expect: 200, prime: () => { prismaMock.aIModel.findUnique.mockResolvedValue({ ...MODEL_ROW, _count: { bots: 0 } }); prismaMock.aIModel.delete.mockResolvedValue(MODEL_ROW); } },
   ];
 
   it.each(cases)('$label', expectCase);
@@ -407,6 +506,14 @@ describe('unauthenticated requests are rejected before any authorization runs', 
     ['get', '/api/v1/platform/users'],
     ['get', '/api/v1/platform/workspaces'],
     ['get', '/api/v1/platform/system'],
+    ['patch', `/api/v1/bots/${BOT_ID}/model`],
+    ['get', '/api/v1/ai/models'],
+    ['get', '/api/v1/platform/providers'],
+    ['patch', `/api/v1/platform/providers/${PROVIDER_ID}`],
+    ['get', '/api/v1/platform/models'],
+    ['post', '/api/v1/platform/models'],
+    ['patch', `/api/v1/platform/models/${MODEL_ID}`],
+    ['delete', `/api/v1/platform/models/${MODEL_ID}`],
   ] as const;
 
   it.each(paths)('%s %s → 401', async (method, path) => {
@@ -419,5 +526,128 @@ describe('unauthenticated requests are rejected before any authorization runs', 
     expect(prismaMock.knowledgeEntry.findUnique).not.toHaveBeenCalled();
     expect(prismaMock.conversation.findUnique).not.toHaveBeenCalled();
     expectNoWrites();
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// Checkpoint 9 — immutability and projection sweeps
+// ---------------------------------------------------------------------------------------
+
+/**
+ * `providerModelId` and `slug` bind a catalog row to something outside the database: an
+ * adapter in the Python service, and the provider-native id an already-assigned bot will
+ * call. Editing either through the API would silently repoint live traffic, so each is
+ * write-once and every attempt is a **400 rather than a stripped 200** — a caller that
+ * believes it changed the id must not be told the update succeeded.
+ *
+ * The mutation-proof half of this sweep is the `expectCase` invariant: a 400 that had
+ * already reached a write would fail `expectNoWrites`, so "rejected" means rejected *before*
+ * the mutation, not rolled back after it.
+ */
+describe('catalog identity fields are write-once', () => {
+  const cases: Case[] = [
+    // Identity fields of the row being edited.
+    { label: 'PATCH /platform/models rejects providerModelId alone → 400', method: 'patch', path: `/api/v1/platform/models/${MODEL_ID}`, as: 'PLATFORM_OWNER', expect: 400, body: { providerModelId: 'openai/gpt-4o' } },
+    { label: 'PATCH /platform/models rejects providerModelId alongside an allowed field → 400', method: 'patch', path: `/api/v1/platform/models/${MODEL_ID}`, as: 'PLATFORM_OWNER', expect: 400, body: { displayName: 'Renamed', providerModelId: 'openai/gpt-4o' } },
+    { label: 'PATCH /platform/providers rejects slug alone → 400', method: 'patch', path: `/api/v1/platform/providers/${PROVIDER_ID}`, as: 'PLATFORM_OWNER', expect: 400, body: { slug: 'openai' } },
+    { label: 'PATCH /platform/providers rejects slug alongside an allowed field → 400', method: 'patch', path: `/api/v1/platform/providers/${PROVIDER_ID}`, as: 'PLATFORM_OWNER', expect: 400, body: { name: 'Renamed', slug: 'openai' } },
+
+    // The catalog-bypass attempt: a provider-native id sent where a catalog uuid belongs.
+    // Rejected for every role that could otherwise write, which is what makes S4 hold
+    // independently of who is calling.
+    { label: 'OWNER cannot assign a provider-native id in place of a catalog uuid → 400', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'OWNER', expect: 400, body: { aiModelId: 'openai/gpt-4o-mini' } },
+    { label: 'ADMIN cannot assign a provider-native id in place of a catalog uuid → 400', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'ADMIN', expect: 400, body: { aiModelId: 'openai/gpt-4o-mini' } },
+    { label: 'a non-uuid model id is 400 even for a platform owner', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'PLATFORM_OWNER', expect: 400, body: { aiModelId: 'openai/gpt-4o-mini' } },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
+/**
+ * The provider-native id must not reach a workspace at all — not through the catalog read,
+ * and not through the bot it is assigned to. Asserting only on the response body would pin
+ * today's mapper; asserting on the `select` pins the reason, so a future field added to the
+ * projection fails here rather than shipping the id to every tenant.
+ */
+describe('providerModelId never reaches a workspace-facing projection', () => {
+  it('the catalog read selects id, displayName and the provider label — nothing else', async () => {
+    prismaMock.workspaceMember.findUnique.mockResolvedValue(memberRow('AGENT'));
+    prismaMock.user.findUnique.mockResolvedValue({ platformRole: 'USER' });
+    prismaMock.aIModel.findMany.mockResolvedValue([]);
+
+    const res = await request(app)
+      .get('/api/v1/ai/models')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(prismaMock.aIModel.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          id: true,
+          displayName: true,
+          provider: { select: { slug: true, name: true } },
+        },
+      })
+    );
+  });
+
+  it('the catalog read carries no provider-native id in its payload', async () => {
+    prismaMock.workspaceMember.findUnique.mockResolvedValue(memberRow('AGENT'));
+    prismaMock.user.findUnique.mockResolvedValue({ platformRole: 'USER' });
+    // The mock returns the *selected* shape, not the table row: if the service ever asked
+    // for `providerModelId`, this fixture would have to change, and the assertion below
+    // would fail on the key rather than pass on a coincidence.
+    prismaMock.aIModel.findMany.mockResolvedValue([
+      { id: MODEL_ID, displayName: 'GPT-4o mini', provider: { slug: 'openrouter', name: 'OpenRouter' } },
+    ]);
+
+    const res = await request(app)
+      .get('/api/v1/ai/models')
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(res.body.data).toHaveLength(1);
+    expect(Object.keys(res.body.data[0]).sort()).toEqual(['displayName', 'id', 'provider']);
+    expect(JSON.stringify(res.body)).not.toContain('openai/gpt-4o-mini');
+  });
+
+  it('a bot read projects its model without the provider-native id', async () => {
+    prismaMock.workspaceMember.findUnique.mockResolvedValue(memberRow('OWNER'));
+    prismaMock.user.findUnique.mockResolvedValue({ platformRole: 'USER' });
+    // The middleware resolves the workspace through the bot before the handler runs.
+    prismaMock.bot.findUnique.mockResolvedValue({ workspaceId: WORKSPACE_ID });
+    prismaMock.bot.findFirst.mockResolvedValue({
+      ...BOT_ROW,
+      aiModelId: MODEL_ID,
+      aiModel: {
+        id: MODEL_ID,
+        displayName: 'GPT-4o mini',
+        enabled: true,
+        provider: { slug: 'openrouter', name: 'OpenRouter', enabled: true },
+      },
+    });
+
+    const res = await request(app)
+      .get(`/api/v1/bots/${BOT_ID}`)
+      .set('Authorization', authHeader());
+
+    expect(res.status).toBe(200);
+    expect(prismaMock.bot.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: {
+          aiModel: {
+            select: {
+              id: true,
+              displayName: true,
+              enabled: true,
+              provider: { select: { slug: true, name: true, enabled: true } },
+            },
+          },
+        },
+      })
+    );
+    const projected = res.body.data.aiModel;
+    expect(Object.keys(projected).sort()).toEqual(['displayName', 'enabled', 'id', 'provider']);
+    expect(JSON.stringify(res.body)).not.toContain('openai/gpt-4o-mini');
   });
 });

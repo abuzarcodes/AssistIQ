@@ -2,10 +2,27 @@ import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../utils/errors.js';
 
+/** The catalog model Node resolved for a bot, in the shape Python's provider layer takes. */
+export interface ChatModelDescriptor {
+  provider: string;
+  model_id: string;
+}
+
 // Define the payload structures based on Python FastAPI endpoints
 export interface ChatPayload {
   bot_id: string;
   message: string;
+  /**
+   * The model this bot is assigned, or **absent** when it has none (Checkpoint 6).
+   *
+   * Optional and omitted rather than sent as `null`: a bot with no assignment must produce
+   * the exact payload it produced before this field existed, and `undefined` is the only
+   * value that leaves the key out of the serialised request entirely.
+   *
+   * Built only by `botModelResolver` from the bot row. It is never populated from request
+   * input, which is the structural reason a client cannot name a model directly.
+   */
+  model?: ChatModelDescriptor;
 }
 
 export interface ChatResponse {

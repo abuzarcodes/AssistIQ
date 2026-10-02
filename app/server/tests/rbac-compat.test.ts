@@ -117,9 +117,15 @@ describe('service-layer scope predicate is pinned (rollback safety)', () => {
       .set('Authorization', authHeader(USER_A));
 
     expect(res.status).toBe(200);
-    expect(prismaMock.bot.findFirst).toHaveBeenCalledWith({
-      where: { id: BOT_ID, workspace: { members: { some: { userId: USER_A.id } } } },
-    });
+    // What this test pins is the *scope predicate* — that tenant isolation lives in the
+    // where-clause and would survive removing the middleware. Checkpoint 3 added an
+    // `aiModel` include to this query, so the assertion is scoped to `where` rather than
+    // matching the whole argument object; the isolation guarantee is unchanged.
+    expect(prismaMock.bot.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: BOT_ID, workspace: { members: { some: { userId: USER_A.id } } } },
+      })
+    );
   });
 
   it('conversation reads are scoped through bot→workspace membership', async () => {

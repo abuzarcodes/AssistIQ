@@ -14,10 +14,17 @@ Two chat pipelines exist in this service and they are NOT the same thing:
 """
 
 from fastapi import APIRouter, Depends, status
-from app.schemas.ai import AIChatRequest, AIChatResponse, AIStatusResponse, SourceDocument
+from app.schemas.ai import (
+    AIChatRequest,
+    AIChatResponse,
+    AIStatusResponse,
+    ProviderAdapterStatus,
+    SourceDocument,
+)
 from app.services.llm_service import LLMService, get_llm_service
 from app.services.embedding_service import EmbeddingService, get_embedding_service
 from app.agents.graph import run_agent_graph
+from app.providers import registered_providers
 
 router = APIRouter(prefix="/ai", tags=["AI"])
 
@@ -31,7 +38,14 @@ async def get_ai_status(
     llm_service: LLMService = Depends(get_llm_service),
     embedding_service: EmbeddingService = Depends(get_embedding_service),
 ):
-    """Retrieve operational status of LLM and Embedding provider configurations."""
+    """Retrieve operational status of LLM and Embedding provider configurations.
+
+    `provider_adapters` reports, per registered adapter, whether a credential is present.
+    Reading it calls `is_configured`, which reads settings — **no provider is contacted**.
+    That is deliberate: the platform dashboard polls this route, and turning it into a
+    liveness probe would both cost money and answer a question ("can we reach them right
+    now?") that this service has no business claiming to know.
+    """
     return AIStatusResponse(
         service="assistiq-ai",
         status="operational",
@@ -39,6 +53,10 @@ async def get_ai_status(
         llm_configured=llm_service.is_configured,
         embedding_provider=embedding_service.provider,
         embedding_configured=embedding_service.is_configured,
+        provider_adapters=[
+            ProviderAdapterStatus(slug=provider.slug, configured=provider.is_configured)
+            for provider in registered_providers()
+        ],
     )
 
 

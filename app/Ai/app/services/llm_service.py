@@ -3,6 +3,7 @@
 from typing import Optional
 from app.core.config import settings
 from app.core.logging import logger, format_log_context
+from app.providers import ProviderModelRef, get_provider
 
 
 class LLMService:
@@ -33,8 +34,36 @@ class LLMService:
         prompt: str,
         system_message: Optional[str] = None,
         temperature: float = 0.0,
+        model: Optional[ProviderModelRef] = None,
     ) -> str:
-        """Generate response from configured LLM provider or fallback mock response."""
+        """Generate a response from the configured LLM provider or a fallback mock response.
+
+        Two distinct paths, and the distinction is the point of this method:
+
+        * ``model is None`` — **exactly the previous behaviour**, unchanged, still driven
+          by ``LLM_PROVIDER`` in the environment. This is the path every existing caller
+          takes (the RAG generator, the experimental graph, the production pipeline when a
+          bot has no model assigned). It is kept verbatim rather than refactored into the
+          provider layer, because those callers have no model to name and their behaviour
+          must not move by accident.
+        * ``model`` supplied — Node resolved a catalog model for this bot, so the
+          environment default is bypassed entirely and the named adapter is used.
+
+        The model path deliberately sits **outside** the ``try`` below. A `ProviderError`
+        is a typed, reportable failure that the chat pipeline maps to a reason code; if it
+        fell into the existing ``except Exception`` it would come back as the
+        ``[Fallback Response] ... Query was: '...'`` string, indistinguishable from a real
+        answer and carrying the user's prompt into the transcript. Errors here propagate.
+        """
+        if model is not None:
+            provider = get_provider(model.provider)
+            return await provider.generate(
+                prompt=prompt,
+                model_id=model.model_id,
+                system_message=system_message,
+                temperature=temperature,
+            )
+
         if not self.is_configured:
             logger.info(
                 "LLM API key not configured. Returning placeholder mock response.",

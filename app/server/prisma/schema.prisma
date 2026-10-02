@@ -44,7 +44,7 @@ model User {
   updatedAt    DateTime     @updatedAt
 
   // A user owns one or more workspaces (Review 1 uses a single-owner model).
-  workspaces Workspace[]
+  workspaces  Workspace[]
   // RBAC: explicit per-workspace membership (added alongside `ownerId` during transition).
   memberships WorkspaceMember[]
 
@@ -88,14 +88,23 @@ model Bot {
   name        String
   description String?
   workspaceId String
+  /// The catalog model this bot runs on. NULL is a permanent, first-class product state
+  /// meaning "follow the platform default model" — it is NOT a transitional migration
+  /// artefact. It is never written implicitly: only an explicit authorized PATCH sets or
+  /// clears it, which is why the relation below is `Restrict` rather than `SetNull`.
+  aiModelId   String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
   workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  /// `Restrict` is a database-level backstop under the service-layer 409 in
+  /// `deleteModel`: a model any bot still references cannot be deleted by any path.
+  aiModel       AIModel?         @relation(fields: [aiModelId], references: [id], onDelete: Restrict)
   knowledge     KnowledgeEntry[]
   conversations Conversation[]
 
   @@index([workspaceId])
+  @@index([aiModelId])
   @@map("bots")
 }
 
@@ -147,4 +156,50 @@ model Message {
 
   @@index([conversationId])
   @@map("messages")
+}
+
+/// A provider of chat models. Rows are seeded/migrated — NOT created through the API,
+/// because a provider only becomes usable once a Python adapter for its `slug` exists.
+/// Credentials are NEVER stored here; they live in the AI service's environment.
+model AIProvider {
+  id          String   @id @default(uuid())
+  /// Stable machine key matching a Python provider adapter slug (e.g. "openrouter").
+  slug        String   @unique
+  /// Human label shown in both dashboards.
+  name        String
+  description String?
+  enabled     Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  models AIModel[]
+
+  @@map("ai_providers")
+}
+
+/// A single selectable model exposed through a provider. `providerModelId` is the
+/// provider-native identifier passed verbatim to the provider API.
+///
+/// `providerModelId` is IMMUTABLE after creation (enforced by the API, not by the DB).
+/// It is the only field whose change would silently alter what an already-assigned bot
+/// calls; correcting a mistake is a delete-and-recreate, never an in-place edit.
+model AIModel {
+  id              String   @id @default(uuid())
+  providerId      String
+  providerModelId String
+  displayName     String
+  enabled         Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  /// `Restrict`, not `Cascade`: a raw provider delete must not silently remove catalog
+  /// rows. Removing a provider is an explicit two-step operation (models, then provider).
+  provider AIProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  bots     Bot[]
+
+  /// The same provider-native id cannot be catalogued twice under one provider.
+  @@unique([providerId, providerModelId])
+  @@index([providerId])
+  @@index([enabled])
+  @@map("ai_models")
 }

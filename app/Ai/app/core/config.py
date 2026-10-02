@@ -26,6 +26,26 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-3.6-flash"
 
+    # OpenRouter Configuration (the first entry in the model catalog)
+    #
+    # These env vars are the ONLY place a provider credential lives. The Node backend has
+    # no OpenRouter variable of any kind: it stores a provider slug and a model id, and
+    # this service maps that slug to the credential. That asymmetry is what keeps the key
+    # out of the application database, out of Node's logs, and off the wire to the browser.
+    #
+    # An empty OPENROUTER_API_KEY means "adapter available, credential absent" — a state
+    # the platform dashboard reports rather than hides, so an operator sees the difference
+    # between "not wired up yet" and "wired up and broken".
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    #: Seconds to wait for a completion. A provider that never answers must not hold a
+    #: conversation open indefinitely; the timeout surfaces as a TIMEOUT ProviderError.
+    OPENROUTER_REQUEST_TIMEOUT: float = 30.0
+    #: OpenRouter's optional attribution headers (`HTTP-Referer` / `X-Title`). They are
+    #: identifiers shown on the provider's dashboard, never credentials.
+    OPENROUTER_SITE_URL: str = ""
+    OPENROUTER_APP_NAME: str = "AssistIQ"
+
     # Embedding Provider Configuration
     EMBEDDING_PROVIDER: str = "openai"
     EMBEDDING_MODEL: str = "text-embedding-3-small"

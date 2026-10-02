@@ -36,6 +36,7 @@ configuration with no core changes.
 app/server/
 ├── prisma/
 │   └── schema.prisma          # User, Workspace, Bot, KnowledgeEntry, Conversation, Message + MessageRole
+│                              #   + AIProvider, AIModel, WorkspaceMember (RBAC), PlatformRole/WorkspaceRole
 ├── src/
 │   ├── config/
 │   │   ├── env.ts             # Zod-validated environment, fail-fast at startup
@@ -62,6 +63,7 @@ app/server/
 │   │   ├── auth.service.ts    │   ├── workspace.service.ts
 │   │   ├── user.service.ts    │   ├── bot.service.ts
 │   │   ├── knowledge.service.ts   ├── conversation.service.ts  # chat orchestration
+│   │   ├── aiCatalog.service.ts   # platform-owned AI model catalog
 │   │   └── ai.service.ts      # the ONLY place that talks to the AI service
 │   ├── controllers/           # thin: read input, call a service, send the response
 │   ├── routes/                # endpoints + middleware wiring only (/api/v1 tree)
@@ -132,12 +134,19 @@ npm run prisma:generate   # generates the typed client
 npm run prisma:migrate    # creates/applies migrations (needs a reachable DB)
 ```
 
-Two migrations make up the current schema:
+Three migrations make up the current schema:
 
-| Migration                      | What it does                                                                                        |
-| ------------------------------ | --------------------------------------------------------------------------------------------------- |
-| `0_init`                       | The base schema (users, workspaces, bots, knowledge, conversations, messages).                        |
-| `20261002141705_init_rbac`     | Adds the `PlatformRole` and `WorkspaceRole` enums, `users.platformRole`, and the `workspace_members` table. Additive only — no data is dropped. |
+| Migration                            | What it does                                                                                        |
+| ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `0_init`                             | The base schema (users, workspaces, bots, knowledge, conversations, messages).                        |
+| `20261002141705_init_rbac`           | Adds the `PlatformRole` and `WorkspaceRole` enums, `users.platformRole`, and the `workspace_members` table. Additive only — no data is dropped. |
+| `20261002181628_add_ai_model_catalog` | Adds `ai_providers` and `ai_models`, and a nullable `bots.aiModelId` referencing `ai_models` with `onDelete: Restrict`. Additive only — every existing bot is left with a `NULL` model, which is the current behaviour. |
+
+> The catalog migration is **additive and non-destructive** by design: `aiModelId` is
+> nullable, so no bot is forced onto a model, and `Restrict` (rather than `Cascade`) means
+> deleting a catalog entry that a bot still points at fails loudly instead of silently
+> unassigning tenants. The `ai_models` row is seeded with the OpenRouter provider
+> **disabled** — the catalog changes nothing until a platform owner turns it on.
 
 After migrating, confirm the RBAC data is consistent:
 
@@ -237,7 +246,14 @@ Auth column: 🔓 public · 🔒 requires `Authorization: Bearer <token>`.
 | GET    | `/workspaces/:workspaceId/bots`        | 🔒   | —                           | 200 |
 | GET    | `/bots/:botId`                         | 🔒   | —                           | 200 (404 if not owned) |
 | PATCH  | `/bots/:botId`                         | 🔒   | `{ name?, description? }`   | 200 |
+| PATCH  | `/bots/:botId/model`                   | 🔒   | `{ aiModelId: uuid \| null }` | 200 → bot with its model |
 | DELETE | `/bots/:botId`                         | 🔒   | —                           | 200 (cascades knowledge/conversations) |
+
+> `PATCH /bots/:botId/model` requires `bots:manage` (OWNER or ADMIN) — the same permission as
+> renaming a bot, deliberately reused rather than a new one, because an AGENT must not gain
+> model-selection rights. `aiModelId` is validated as an **internal catalog uuid**, so a
+> provider-native id such as `openai/gpt-4o` is a **400** before any handler runs. Sending
+> `null` clears the assignment and is always permitted. See [AI model catalog](#ai-model-catalog).
 
 ### Knowledge base (FAQ, nested under a bot for create/list)
 
@@ -256,6 +272,91 @@ Auth column: 🔓 public · 🔒 requires `Authorization: Bearer <token>`.
 | GET    | `/bots/:botId/conversations`                | 🔒   | —               | 200 |
 | GET    | `/conversations/:conversationId`            | 🔒   | —               | 200 → conversation **with messages** |
 | POST   | `/conversations/:conversationId/messages`   | 🔒   | `{ content }`   | 201 → `{ userMessage, assistantMessage, ai }` |
+
+### AI model catalog
+
+Two audiences, two surfaces. The **workspace-facing** route is how a client renders a model
+selector; the **platform** routes are how a platform owner curates what that selector offers.
+
+| Method | Path                            | Auth | Body / query | Success |
+| ------ | ------------------------------- | ---- | ------------ | ------- |
+| GET    | `/ai/models`                    | 🔒   | —            | 200 → enabled models of enabled providers |
+| GET    | `/platform/providers`           | 🔒 + PLATFORM_OWNER | — | 200 → every provider, with counts and readiness |
+| PATCH  | `/platform/providers/:providerId` | 🔒 + PLATFORM_OWNER | `{ name?, description?, enabled? }` | 200 |
+| GET    | `/platform/models`              | 🔒 + PLATFORM_OWNER | `?providerId=<uuid>&enabled=true\|false` | 200 → every model, any state |
+| POST   | `/platform/models`              | 🔒 + PLATFORM_OWNER | `{ providerId, providerModelId, displayName, enabled? }` | 201 |
+| PATCH  | `/platform/models/:modelId`     | 🔒 + PLATFORM_OWNER | `{ displayName?, enabled? }` | 200 |
+| DELETE | `/platform/models/:modelId`     | 🔒 + PLATFORM_OWNER | —            | 200 (409 while a bot references it) |
+
+**Two projections, deliberately different.**
+
+- `GET /ai/models` returns exactly `{ id, displayName, provider: { slug, name } }`.
+  `providerModelId` — the provider-native id — is **absent**, and so is every enabled flag and
+  bot count. A workspace selects by internal uuid; handing it the native id would invite a
+  client to call the provider directly, which is the catalog bypass this API exists to prevent.
+- `GET /platform/models` is the operator's view and *does* carry `providerModelId`, the
+  resolved provider, and a live `botCount` (computed from the relation, never a stored counter
+  that could drift).
+
+**No credential ever crosses this boundary.** Neither surface returns an API key, and the
+server holds no provider credential to return — see [Provider readiness](#provider-readiness).
+The platform payload reports readiness as two nullable booleans, never as a masked string.
+
+**Identity fields are write-once.** `providerModelId` (models) and `slug` (providers) are set
+at creation and cannot be changed. `PATCH /platform/models` and `PATCH /platform/providers` are
+`.strict()` schemas, so a body containing either field is rejected with a **400** rather than
+having the field silently stripped — a `200` that ignored the field would mislead the client
+about what the system will actually call. Correcting a wrong `providerModelId` is
+delete-and-recreate, which is safe precisely because deletion is blocked while the model is in
+use.
+
+**New models are created disabled.** `enabled` defaults to `false`, so a `POST` cannot by
+itself change what tenants can select. A model is selectable only when **both** the model and
+its provider are enabled — two independent gates, both flipped deliberately.
+
+---
+
+## Provider readiness
+
+`GET /platform/providers` reports, per provider, two **independent** nullable booleans plus
+derived model counts:
+
+| Field                  | Meaning                                                                 | `null` means |
+| ---------------------- | ----------------------------------------------------------------------- | ------------ |
+| `adapterAvailable`     | The AI service has a Python adapter registered for this provider slug     | the AI service could not be reached |
+| `credentialConfigured` | That adapter reports its provider credential is present in **its** env    | same |
+| `modelCount` / `enabledModelCount` | Derived live from the relation, never stored                 | — |
+
+They are separate on purpose: a missing adapter is a **deployment** problem, a missing
+credential is a **configuration** problem, and the operator's fix differs. Collapsing them into
+one "health" dot would hide which one is wrong.
+
+`null` is not `false`. When the AI service is unreachable, or does not report adapters at all,
+the fields are `null` — rendered as "unknown" — because claiming `false` would assert "no
+adapter is registered", which this code cannot know. This is what keeps the provider list
+renderable while the AI service is down; readiness degrades, the list does not.
+
+> **v1 measures no live reachability.** No dashboard request makes a provider-bound network
+> call. A configured credential is reported as configured, not as *working* — a revoked key
+> still reads `true` until the provider is actually called at chat time, where it surfaces as
+> `MODEL_UNAVAILABLE`. This is a deliberate scope decision, not an oversight.
+
+## Attribution of catalog changes
+
+Every successful catalog mutation (create, enable/disable, edit, delete) writes **one**
+structured log record — `action`, `actorId`, `targetId`, and the resulting state:
+
+```jsonc
+{ "level": 30, "actorId": "…", "action": "model.created", "targetId": "…",
+  "providerId": "…", "enabled": false, "msg": "ai catalog change" }
+```
+
+A catalog change alters what **every** tenant can select, so it has to be answerable to "who
+did this?". v1 has **no audit table and no audit endpoint** — that is a deliberate scope
+decision — so this record is the whole of the trail. It is written by the controller, the only
+layer that knows the actor, and it carries no credential and no provider-native id: only the
+catalog's own uuid, which is what a durable audit table would reference anyway. A **denied** or
+**rejected** request logs nothing, because nothing changed.
 
 ---
 
@@ -349,6 +450,18 @@ matrix is the single source of truth.
 | `ADMIN` | manage bots, knowledge and documents; reply/resolve/assign conversations                | manage members, update or delete the workspace |
 | `AGENT` | read workspace/knowledge context, reply to and resolve conversations                   | view or manage bots, manage knowledge, manage members, assign conversations |
 
+**Choosing a bot's model reuses `bots:manage`.** `PATCH /bots/:botId/model` introduces no new
+permission: assigning a model is a bot-management action, so it is gated on the permission that
+already covers renaming a bot (OWNER and ADMIN). An AGENT therefore cannot select a model, and
+cannot gain that ability without first gaining bot management. The workspace-facing catalog
+read (`GET /ai/models`) is authenticated but carries **no** permission gate — the list is
+identical for every caller and contains no tenant data, so the authorization that matters is on
+the write path, not on reading the options.
+
+The permission check runs **after** validation: `validate()` sits before
+`requireWorkspacePermission(...)` on that route, so a provider-native id in place of a catalog
+uuid is a **400 for every role**, never a 403 that would hint the check is what failed.
+
 ### Denial semantics (important)
 
 - **No workspace membership → `404`**, never `403`. A tenant the caller cannot see must be
@@ -381,6 +494,11 @@ every role — including a non-member and a non-member platform owner — and as
 request returns the right status **and writes nothing**. [`tests/rbac-compat.test.ts`](tests/rbac-compat.test.ts)
 pins the service-layer scope predicates that the rollback story depends on.
 
+The matrix covers the AI catalog routes too, including the two properties that are easy to lose
+in a refactor: `providerModelId` and `slug` are **write-once** (a `PATCH` carrying either is a
+400, not a silent strip), and the provider-native id **never appears in a workspace-facing
+projection**.
+
 ---
 
 ## AI service boundary
@@ -404,6 +522,18 @@ store the `USER` message → call `aiServiceClient.chat()` → flip the conversa
 `WAITING_FOR_HUMAN` when `fallback_required` → store the `ASSISTANT` message → return both
 plus AI metadata. Controllers never call the AI service directly.
 
+When a bot has a model assigned, the conversation service resolves **`providerModelId` and the
+provider slug** and sends them to the AI service alongside the message. That resolution happens
+here, in Node, and the resulting native id travels only on the **server-to-server** call behind
+`X-API-Key` — it is never returned to a client. A bot with **no** model assigned sends no
+override at all, and the AI service falls back to its own configured default: that is the
+pre-catalog behaviour, preserved exactly.
+
+**The server holds no provider credential.** There is no `OPENROUTER_API_KEY` in
+`src/config/env.ts` and none is expected — provider keys live only in the Python service's
+environment. This is why the platform catalog reports readiness rather than probing a provider:
+Node has nothing to probe with, and deliberately never will.
+
 ---
 
 ## Testing
@@ -420,10 +550,17 @@ Vitest + Supertest. Prisma and the AI service are **mocked** (`vi.mock`), so tes
   invalid login (401, generic message), protected route without token (401).
 - **workspace** — create (owner from token, not body); cross-tenant read → 404.
 - **bot** — create (asserts workspace ownership first); cannot create in another user's
-  workspace (404); cross-tenant read → 404.
+  workspace (404); cross-tenant read → 404; model assignment rejects an unknown, a disabled,
+  and a provider-disabled model with 400; a provider-native id is 400 for every role.
 - **conversation** — create under an owned bot; `sendMessage` stores USER + ASSISTANT and calls
   the AI boundary once; cross-tenant post → 404 and the AI service is **never** called; empty
   message → 400.
+- **ai-catalog** — the full platform lifecycle (create → enable → assign → disable → re-enable),
+  the disable-after-assignment path, delete-while-referenced → 409, one attribution record per
+  catalog change, and a recursive scan of both catalog payloads asserting **no
+  credential-shaped key or value** appears anywhere in them.
+- **rbac-matrix** — every role × every route, including the catalog routes, the write-once
+  identity fields, and the provider-native id's absence from workspace-facing projections.
 
 ---
 

@@ -163,8 +163,13 @@ describe('GET /api/v1/bots/:botId (tenant isolation)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.id).toBe(BOT_ID);
-    expect(prismaMock.bot.findFirst).toHaveBeenCalledWith({
-      where: { id: BOT_ID, workspace: { members: { some: { userId: USER_A.id } } } },
-    });
+    // The scope predicate is the contract this test guards. Checkpoint 3 added an
+    // `aiModel` include to the same query, so the assertion is scoped to `where` rather
+    // than matching the whole argument object.
+    expect(prismaMock.bot.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: BOT_ID, workspace: { members: { some: { userId: USER_A.id } } } },
+      })
+    );
   });
 });

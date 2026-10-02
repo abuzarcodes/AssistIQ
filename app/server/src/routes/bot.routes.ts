@@ -3,7 +3,7 @@ import { validate } from '../middleware/validation.middleware.js';
 import { requireWorkspacePermission } from '../middleware/authorization.middleware.js';
 import { PERMISSIONS } from '../constants/permissions.js';
 import { workspaceIdParamSchema } from '../schemas/workspace.schema.js';
-import { createBotSchema, updateBotSchema, botIdParamSchema } from '../schemas/bot.schema.js';
+import { createBotSchema, updateBotSchema, botIdParamSchema, assignModelSchema } from '../schemas/bot.schema.js';
 import * as botController from '../controllers/bot.controller.js';
 import { knowledgeCreateListRouter } from './knowledge.routes.js';
 import { conversationCreateListRouter } from './conversation.routes.js';
@@ -52,6 +52,17 @@ router.delete(
   validate({ params: botIdParamSchema }),
   requireWorkspacePermission(PERMISSIONS.BOTS_MANAGE, botScope),
   botController.deleteBot
+);
+
+// Assigning a model is a bot-management action, so it reuses `bots:manage` rather than
+// introducing a permission (AGENT holds neither, and must not gain one). The model id is
+// validated as an internal uuid by `assignModelSchema`, so a provider-native id — the
+// catalog-bypass attempt — is a 400 before any handler runs.
+router.patch(
+  '/:botId/model',
+  validate({ params: botIdParamSchema, body: assignModelSchema }),
+  requireWorkspacePermission(PERMISSIONS.BOTS_MANAGE, botScope),
+  botController.assignModel
 );
 
 router.use('/:botId/knowledge', knowledgeCreateListRouter);

@@ -9,11 +9,16 @@ import pytest
 
 from app.core.config import settings
 
-# One representative route per protected router.
+# One representative route per protected router. `/api/v1/chat` is the production chat route
+# and is listed explicitly for that reason: it is the one an unauthenticated caller has the
+# most incentive to reach, and the one whose own route file carries no auth decorator of its
+# own — the guarantee is entirely the `dependencies=[Depends(require_api_key)]` at mount time.
 PROTECTED_ROUTES = [
     ("GET", "/api/v1/ai/status"),
     ("GET", "/api/v1/ml/status"),
+    ("POST", "/api/v1/knowledge/ingest"),
     ("POST", "/api/v1/rag/search"),
+    ("POST", "/api/v1/chat"),
     ("GET", "/api/v1/testing/status"),
 ]
 

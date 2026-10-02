@@ -130,6 +130,17 @@ Base URL: `http://localhost:5000/api/v1`
 - **Description:** Delete a bot. This will also cascade delete all its conversations and knowledge in Postgres, and delete its embeddings in the AI Vector Store.
 - **Output (200 OK):** `{ "success": true }`
 
+### PATCH `/bots/:botId/model`
+- **Description:** Assign a catalog model to a bot, or clear the assignment. Requires `bots:manage` (OWNER or ADMIN) — the same permission as renaming a bot, deliberately reused; an AGENT receives **403**.
+- **Input (JSON):**
+  ```json
+  {
+    "aiModelId": "uuid of a catalog model, or null to clear"
+  }
+  ```
+- **Notes:** The id is an **internal catalog uuid**, not a provider model id. A provider-native id such as `openai/gpt-4o` fails validation with **400** before any permission check runs, so it is a 400 for every role. An unknown model is 400; a **disabled** model, or a model whose provider is disabled, is 400. Sending `null` skips validation entirely and is always permitted — `null` means "use the platform default".
+- **Output (200 OK):** Updated Bot object, including `aiModel` — which never contains the provider-native id.
+
 ---
 
 ## 5. Knowledge (FAQs / RAG Data)
@@ -227,6 +238,65 @@ Base URL: `http://localhost:5000/api/v1`
 - **POST `/admin/ai/debug/chat-pipeline`**: Run full chat pipeline returning execution traces.
 - **GET `/admin/ai/testing/status`**: System status across VectorDB, ML, and LLM.
 - **GET `/admin/ai/vector-stats`**: Postgres pgvector health and index stats.
+
+---
+
+## 8. AI Model Catalog
+
+Two audiences. `GET /ai/models` is how a client renders a model selector; the `/platform/*`
+routes are how a platform owner curates what that selector offers. **No credential ever crosses
+this boundary** — the server holds no provider credential, and readiness is reported as
+booleans, never as a masked string.
+
+### GET `/ai/models`
+- **Description:** The catalog as a workspace sees it — **enabled models of enabled providers**. Authenticated, but deliberately unscoped: the list is identical for every caller and contains no tenant data.
+- **Output (200 OK):** Array of `{ id, displayName, provider: { slug, name } }`.
+- **Notes:** `providerModelId` is deliberately **absent**. Workspaces select by internal uuid; returning the native id would invite a client to call the provider directly, which is the catalog bypass this API exists to prevent.
+
+### GET `/platform/providers`
+- **Auth:** `PLATFORM_OWNER` only (403 for every other role).
+- **Output (200 OK):** Every provider with `modelCount`, `enabledModelCount`, and the two readiness axes:
+  - `adapterAvailable` — the AI service has a Python adapter for this slug.
+  - `credentialConfigured` — that adapter reports its credential is present.
+- **Notes:** The axes are reported **separately** (a missing adapter is a deployment problem; a missing credential is a configuration problem — different remedies). Both are `null` — "unknown", never `false` — when the AI service is unreachable. **No live provider call is made**; readiness is configuration state, not reachability.
+
+### PATCH `/platform/providers/:providerId`
+- **Auth:** `PLATFORM_OWNER` only.
+- **Input (JSON):** `{ "name"?, "description"?, "enabled"? }` — at least one field.
+- **Notes:** `slug` is immutable: the schema is `.strict()`, so sending it is a **400**, not a silent strip. Disabling a provider mutates **no** model rows, so re-enabling restores the exact prior per-model selection.
+- **Output (200 OK):** Updated provider view.
+
+### GET `/platform/models`
+- **Auth:** `PLATFORM_OWNER` only.
+- **Query:** `?providerId=<uuid>&enabled=true|false` (both optional).
+- **Output (200 OK):** Every model in any state, each with `providerModelId`, its resolved provider, and a live `botCount`.
+
+### POST `/platform/models`
+- **Auth:** `PLATFORM_OWNER` only.
+- **Input (JSON):**
+  ```json
+  {
+    "providerId": "uuid (required)",
+    "providerModelId": "string (required, no whitespace) — the provider's own id",
+    "displayName": "string (required, max 120)",
+    "enabled": false
+  }
+  ```
+- **Notes:** This is the **only** request in the API that writes `providerModelId`, and it writes it once. `enabled` defaults to **false**, so cataloguing never silently changes platform behaviour. A duplicate `(providerId, providerModelId)` is **409**. A wrong `providerModelId` is not detectable here — Node holds no provider credential and makes no provider calls — so it surfaces at chat time as `MODEL_UNAVAILABLE`.
+- **Output (201 Created):** Model view.
+
+### PATCH `/platform/models/:modelId`
+- **Auth:** `PLATFORM_OWNER` only.
+- **Input (JSON):** `{ "displayName"?, "enabled"? }` — at least one field.
+- **Notes:** `providerModelId` is **immutable**: the schema is `.strict()`, so sending it is a **400**. Correcting a wrong id is delete-and-recreate, which is safe because deletion is blocked while the model is in use.
+- **Output (200 OK):** Updated model view.
+
+### DELETE `/platform/models/:modelId`
+- **Auth:** `PLATFORM_OWNER` only.
+- **Notes:** Refused with **409** while any bot references the model. Two independent mechanisms enforce this: the service's bot-count check (which produces the actionable message) and the `onDelete: Restrict` foreign key (the actual guarantee, which holds even if the check is bypassed or raced).
+- **Output (200 OK):** `{ "success": true }`.
+
+> **Attribution.** Every successful catalog mutation emits exactly **one** structured log record naming the actor, the action, and the target — the interim control, since v1 has no audit table and no audit endpoint. A denied or rejected request logs nothing, because nothing changed. The record carries the catalog's own uuid, never a credential or a provider-native id.
 
 ---
 

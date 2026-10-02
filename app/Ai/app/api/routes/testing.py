@@ -8,6 +8,7 @@ from app.services.vector_store_service import get_vector_store_service, VectorSt
 from app.services.embedding_service import get_embedding_service, EmbeddingService
 from app.services.llm_service import get_llm_service, LLMService
 from app.services.chat_service import get_chat_service, ChatService
+from app.providers import ProviderModelRef
 from app.core.logging import logger
 
 router = APIRouter(prefix="/testing", tags=["Testing & Debugging"])
@@ -54,9 +55,19 @@ async def debug_chat_pipeline(
     try:
         result = await chat_service.process_chat(
             bot_id=request.bot_id,
-            message=request.message
+            message=request.message,
+            # Same optional descriptor as the production route, so the AI Lab can exercise
+            # a specific catalog model rather than only the environment default.
+            model=(
+                ProviderModelRef(
+                    provider=request.model.provider,
+                    model_id=request.model.model_id,
+                )
+                if request.model is not None
+                else None
+            ),
         )
-        
+
         # chat_service attaches a full 'debug' dict which fits PipelineDebugResponse
         if "debug" not in result:
             raise HTTPException(status_code=500, detail="Missing debug trace data")

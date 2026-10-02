@@ -5,11 +5,46 @@ from pydantic import BaseModel, Field
 from app.schemas.classifier import IntentPrediction
 
 
+class ModelRef(BaseModel):
+    """The catalog model a bot is assigned, as resolved by the Node backend.
+
+    Node owns the catalog: it decides which provider/model pair a bot may use, and it
+    builds this descriptor from the bot row — never from client input. This service
+    validates `provider` against its adapter registry and passes `model_id` straight to
+    that adapter; it holds no catalog and cannot second-guess the choice.
+
+    Both fields are bounded because an unbounded string would reach a vendor SDK.
+    """
+
+    provider: str = Field(
+        ...,
+        min_length=1,
+        max_length=64,
+        description="Provider slug, matched against the adapter registry",
+        example="openrouter",
+    )
+    model_id: str = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="The provider's own model identifier",
+        example="openai/gpt-4o-mini",
+    )
+
+
 class ChatRequest(BaseModel):
     """Request payload for the main chat endpoint."""
 
     bot_id: str = Field(..., description="Unique ID of tenant bot", example="demo_bot_001")
     message: str = Field(..., description="User message/question", example="Can I get my money back?")
+    model: Optional[ModelRef] = Field(
+        default=None,
+        description=(
+            "Optional catalog model for this bot. Absent means the request runs on the "
+            "service's environment-configured default — the behaviour of every request "
+            "before the model catalog existed."
+        ),
+    )
 
 
 class IntentInfo(BaseModel):

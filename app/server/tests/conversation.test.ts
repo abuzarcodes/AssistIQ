@@ -59,6 +59,21 @@ const authHeader = (user: { id: string; email: string }): string =>
 
 const botBelongsToWorkspace = () => prismaMock.bot.findUnique.mockResolvedValue({ workspaceId: WORKSPACE_ID });
 
+/**
+ * The bot has no model assigned — the platform-default path (Checkpoint 6).
+ *
+ * `addMessage` now resolves the bot's model before calling the AI service, and that
+ * resolution is its own `bot.findUnique`. Priming it here keeps these tests exercising what
+ * they were written to exercise; left unprimed, the resolver reports "bot row not found" and
+ * every one of them would silently take the short-circuit path instead — passing or failing
+ * for reasons unrelated to the assertions they make.
+ *
+ * `aiModelId: null` is the state these tests have always described: a bot on the platform
+ * default, sending the same payload it sent before the resolver existed.
+ */
+const botHasNoModel = () =>
+  prismaMock.bot.findUnique.mockResolvedValue({ aiModelId: null, aiModel: null });
+
 const conversationBelongsToWorkspace = () =>
   prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
 
@@ -111,6 +126,7 @@ describe('POST /api/v1/conversations/:conversationId/messages', () => {
     conversationBelongsToWorkspace();
     membership(USER_A.id, 'OWNER');
     prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID });
+    botHasNoModel();
     prismaMock.knowledgeEntry.findMany.mockResolvedValue([
       { title: null, category: null, question: 'Hours?', answer: 'Nine to five.' },
     ]);
@@ -159,6 +175,7 @@ describe('POST /api/v1/conversations/:conversationId/messages', () => {
     conversationBelongsToWorkspace();
     membership(USER_B.id, 'AGENT');
     prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID });
+    botHasNoModel();
     prismaMock.knowledgeEntry.findMany.mockResolvedValue([]);
     prismaMock.message.create.mockResolvedValue({
       id: 'msg',
@@ -238,6 +255,7 @@ describe('Checkpoint 7 — agent conversation foundation', () => {
     conversationBelongsToWorkspace();
     membership(USER_B.id, 'AGENT');
     prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID });
+    botHasNoModel();
     prismaMock.knowledgeEntry.findMany.mockResolvedValue([]);
     prismaMock.message.create.mockResolvedValue({
       id: 'msg',
@@ -264,6 +282,10 @@ describe('Checkpoint 7 — agent conversation foundation', () => {
       .send({ content: 'I need a human' });
 
     expect(res.status).toBe(201);
+    // Strengthened in Checkpoint 6: there are now *two* routes to an escalation — Python
+    // asking for a human, and Node short-circuiting on an unusable model. Without this the
+    // test would pass on either, and would no longer be about the AI service's answer.
+    expect(aiMock.chat).toHaveBeenCalledTimes(1);
     expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
     const { data } = prismaMock.conversation.update.mock.calls[0][0] as {
       data: Record<string, unknown>;

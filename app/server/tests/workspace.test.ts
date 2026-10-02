@@ -163,3 +163,50 @@ describe('GET /api/v1/workspaces/:workspaceId (tenant isolation)', () => {
     expect(res.status).toBe(200);
   });
 });
+
+/**
+ * Checkpoint 3 — `viewerRole` on the workspace detail response.
+ *
+ * Presentation-only: the client uses it to decide whether to render management
+ * affordances. It is computed from the caller's resolved membership, never from the
+ * request, and is never consulted to authorize anything.
+ */
+describe('GET /api/v1/workspaces/:workspaceId — viewerRole', () => {
+  const workspaceRow = () => ({
+    id: WORKSPACE_ID,
+    name: 'Support',
+    ownerId: USER_A.id,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  it.each(['OWNER', 'ADMIN', 'AGENT'] as const)(
+    'reports viewerRole = %s for a caller with that membership role',
+    async (role) => {
+      membershipFor(USER_B.id, role);
+      prismaMock.workspace.findFirst.mockResolvedValue(workspaceRow());
+
+      const res = await request(app)
+        .get(`/api/v1/workspaces/${WORKSPACE_ID}`)
+        .set('Authorization', authHeader(USER_B));
+
+      expect(res.status).toBe(200);
+      expect(res.body.data.viewerRole).toBe(role);
+    }
+  );
+
+  it('is not accepted as request input — a body or query cannot set it', async () => {
+    membershipFor(USER_B.id, 'AGENT');
+    prismaMock.workspace.findFirst.mockResolvedValue(workspaceRow());
+
+    // A GET body is unusual but legal; the query is the more plausible attempt.
+    const res = await request(app)
+      .get(`/api/v1/workspaces/${WORKSPACE_ID}?viewerRole=OWNER`)
+      .set('Authorization', authHeader(USER_B))
+      .send({ viewerRole: 'OWNER' });
+
+    expect(res.status).toBe(200);
+    // The true role wins: the value is derived from the membership row, not the request.
+    expect(res.body.data.viewerRole).toBe('AGENT');
+  });
+});

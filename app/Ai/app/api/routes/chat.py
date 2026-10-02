@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_service import get_chat_service, ChatService
+from app.providers import ProviderModelRef
 from app.core.logging import logger
 
 router = APIRouter(tags=["Chat"])
@@ -17,11 +18,21 @@ async def chat_pipeline(
     try:
         result = await chat_service.process_chat(
             bot_id=request.bot_id,
-            message=request.message
+            message=request.message,
+            # Explicit conversion at the transport boundary: the service layer takes the
+            # provider layer's own value type, not a Pydantic request model.
+            model=(
+                ProviderModelRef(
+                    provider=request.model.provider,
+                    model_id=request.model.model_id,
+                )
+                if request.model is not None
+                else None
+            ),
         )
-        # Note: We omit 'debug' block in production response, or we could include it. 
+        # Note: We omit 'debug' block in production response, or we could include it.
         # The prompt requires deterministic endpoints, so we map the service output exactly.
-        
+
         return ChatResponse(
             status=result["status"],
             response=result["response"],

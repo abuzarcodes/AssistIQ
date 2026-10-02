@@ -54,7 +54,7 @@
 
 **Methods:** `GET`
 
-**Description:** Retrieve operational status of LLM and Embedding provider configurations.
+**Description:** Retrieve operational status of LLM and Embedding provider configurations. Also reports `provider_adapters` — every registered provider adapter and whether its credential is present. Reading it calls `is_configured`, which reads settings: **no provider is contacted**, and no credential-derived value is returned.
 
 ---
 
@@ -135,7 +135,7 @@
 
 **Methods:** `POST`
 
-**Description:** Main hybrid deterministic AI chat pipeline for answering user questions.
+**Description:** Main hybrid deterministic AI chat pipeline for answering user questions. Accepts an **optional** `model: { provider, model_id }` descriptor, built by the Node backend from the bot's catalog model — never from client input. Absent means the request runs on the service's environment-configured default, which is the pre-catalog behaviour. The provider slug is validated against the adapter registry; the model id is passed verbatim to that adapter, because this service holds no catalog.
 
 ---
 

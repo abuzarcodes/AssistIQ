@@ -9,6 +9,7 @@ import knowledgeRoutes from './knowledge.routes.js';
 import conversationRoutes from './conversation.routes.js';
 import adminAiRoutes from './admin.ai.routes.js';
 import platformRoutes from './platform.routes.js';
+import aiCatalogRoutes from './aiCatalog.routes.js';
 
 const router = Router();
 
@@ -23,6 +24,13 @@ router.use('/workspaces', authenticate, workspaceRoutes);
 router.use('/bots', authenticate, botRoutes);
 router.use('/knowledge', authenticate, knowledgeRoutes);
 router.use('/conversations', authenticate, conversationRoutes);
+
+// The AI catalog as workspaces see it: the list of *enabled* models, so a client can offer
+// a model selector. Authenticated but deliberately unscoped — the list is identical for
+// every caller and contains no tenant data, and this router carries no workspace id for a
+// permission check to resolve. Authorization lives on the write path instead
+// (`PATCH /bots/:botId/model`, gated on `bots:manage`).
+router.use('/ai', authenticate, aiCatalogRoutes);
 
 // AI Lab / testing tools: authenticated AND platform-owner only. Previously any
 // authenticated user could reach these (see the audit in the RBAC plan).
