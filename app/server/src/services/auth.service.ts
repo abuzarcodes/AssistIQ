@@ -49,3 +49,4 @@ export const login = async (input: LoginInput): Promise<AuthResult> => {
   const token = signToken({ sub: user.id, email: user.email });
   return { user: toSafeUser(user), token };
 };
+
