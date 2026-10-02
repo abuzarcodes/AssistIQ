@@ -10,6 +10,7 @@ export const userSafeSelect = {
   id: true,
   name: true,
   email: true,
+  platformRole: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -21,6 +22,7 @@ export const toSafeUser = (user: User): SafeUser => ({
   id: user.id,
   name: user.name,
   email: user.email,
+  platformRole: user.platformRole,
   createdAt: user.createdAt,
   updatedAt: user.updatedAt,
 });

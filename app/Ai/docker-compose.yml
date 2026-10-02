@@ -1,0 +1,37 @@
+# Vector store for the AssistIQ AI service (PostgreSQL + pgvector).
+#
+# The RAG pipeline needs the `vector` extension, which a plain `postgres` image does not
+# ship — hence the dedicated image. It runs on its own port and database, separate from the
+# application database the Express server owns.
+#
+# Usage:
+#   docker compose up -d
+#
+# The password must match the one in DATABASE_URL in `.env`. Set VECTOR_DB_PASSWORD there
+# (docker compose reads `.env` from this directory automatically) or leave it unset to use
+# the default, which is what `.env.example` ships with.
+#
+# Verify:
+#   docker compose exec vector-db psql -U postgres -d assistiq -c '\dx'
+
+services:
+  vector-db:
+    image: pgvector/pgvector:pg16
+    container_name: assistiq-pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${VECTOR_DB_PASSWORD:-password}
+      POSTGRES_DB: assistiq
+    ports:
+      - '5433:5432'
+    volumes:
+      - assistiq_pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d assistiq']
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  assistiq_pgvector_data:

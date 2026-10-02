@@ -24,7 +24,7 @@ export const authenticate = (req: Request, _res: Response, next: NextFunction): 
   }
 
   const payload = verifyToken(token);
-  req.user = { id: payload.sub, email: payload.email };
+  req.user = { id: payload.sub, email: payload.email, platformRole: payload.platformRole };
 
   next();
 };

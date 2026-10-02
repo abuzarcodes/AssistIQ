@@ -39,10 +39,6 @@ class ChatResponse(BaseModel):
 
 # Testing/Debug Schemas
 
-class FallbackInfo(BaseModel):
-    fallback_required: bool = Field(..., description="Whether fallback occurred")
-    reason: Optional[str] = Field(default=None, description="Fallback reason")
-
 class PipelineDebugResponse(BaseModel):
     """Detailed response exposing all pipeline steps for debugging/demonstration."""
 

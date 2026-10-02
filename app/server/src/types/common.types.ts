@@ -1,41 +1,25 @@
+import type { PlatformRole } from '@prisma/client';
+
 /**
  * The authenticated principal attached to `req.user` by the auth middleware.
  * Deliberately minimal — never carries the password hash or other sensitive data.
+ *
+ * `platformRole` is carried for convenience (client rendering, cheap checks). It is NOT
+ * the authoritative source for platform authorization: `requirePlatformOwner` re-reads
+ * the role from the database so a demotion takes effect immediately, not at token expiry.
  */
 export interface AuthUser {
   id: string;
   email: string;
+  platformRole?: PlatformRole;
 }
 
 /** Shape of the signed JWT payload. `sub` is the user id (standard JWT claim). */
 export interface JwtPayload {
   sub: string;
   email: string;
+  /** Optional so tokens issued before RBAC remain verifiable (they simply lack it). */
+  platformRole?: PlatformRole;
 }
 
-/** A single FAQ entry handed to the AI service as grounding context. */
-export interface AIKnowledgeItem {
-  title?: string | null;
-  category?: string | null;
-  question: string;
-  answer: string;
-}
-
-/** Input the conversation service passes to the AI service boundary. */
-export interface AIRequestInput {
-  botId: string;
-  conversationId: string;
-  message: string;
-  knowledge: AIKnowledgeItem[];
-}
-
-/**
- * The contract the AI/ML service (mock now, Python/FastAPI later) fulfils.
- * Keeping this stable means swapping mock -> live requires no caller changes (spec §14/§15).
- */
-export interface AIResponse {
-  answer: string;
-  intent?: string;
-  confidence?: number;
-  shouldEscalate?: boolean;
-}
+export type { PlatformRole };

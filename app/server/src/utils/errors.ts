@@ -33,8 +33,14 @@ export class AuthenticationError extends AppError {
   }
 }
 
-/** 403 — authenticated but not allowed to perform this action. */
-export class AuthorizationError extends AppError {
+/**
+ * 403 — request is authenticated but not permitted (RBAC denial).
+ *
+ * Reserved for the case where the caller IS a workspace member but their role lacks the
+ * required permission. A caller with no membership at all receives 404 instead, so the
+ * existence of a tenant they cannot see is never leaked (see authorization.middleware).
+ */
+export class ForbiddenError extends AppError {
   constructor(message = 'You do not have permission to perform this action') {
     super(message, 403);
   }

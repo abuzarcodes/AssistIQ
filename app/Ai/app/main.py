@@ -1,9 +1,10 @@
 """FastAPI Application Entry Point & Factory."""
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.auth import require_api_key
 from app.core.config import settings
 from app.core.logging import logger, format_log_context
 from app.core.exceptions import register_exception_handlers
@@ -75,16 +76,21 @@ def create_app() -> FastAPI:
     # Register Exception Handlers
     register_exception_handlers(app)
 
-    # Register Health Route at root level
+    # Register Health Route at root level — intentionally unauthenticated so liveness
+    # and readiness probes keep working without the shared secret.
     app.include_router(health_router)
 
-    # Register Versioned API Routers under /api/v1
-    app.include_router(ai_router, prefix="/api/v1")
-    app.include_router(classifier_router, prefix="/api/v1")
-    app.include_router(knowledge_router, prefix="/api/v1")
-    app.include_router(rag_router, prefix="/api/v1")
-    app.include_router(chat_router, prefix="/api/v1")
-    app.include_router(testing_router, prefix="/api/v1")
+    # Register Versioned API Routers under /api/v1.
+    # Every one of them requires the service-to-service API key: the Node backend is the
+    # only authorized caller, so the AI service is not reachable directly from a browser
+    # or any other container (Checkpoint 5).
+    protected = [Depends(require_api_key)]
+    app.include_router(ai_router, prefix="/api/v1", dependencies=protected)
+    app.include_router(classifier_router, prefix="/api/v1", dependencies=protected)
+    app.include_router(knowledge_router, prefix="/api/v1", dependencies=protected)
+    app.include_router(rag_router, prefix="/api/v1", dependencies=protected)
+    app.include_router(chat_router, prefix="/api/v1", dependencies=protected)
+    app.include_router(testing_router, prefix="/api/v1", dependencies=protected)
 
     return app
 

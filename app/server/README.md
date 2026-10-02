@@ -42,12 +42,12 @@ app/server/
 │   │   ├── database.ts        # PrismaClient singleton
 │   │   └── logger.ts          # pino logger (redacts secrets/tokens/passwords)
 │   ├── constants/
-│   │   └── roles.ts           # MessageRole re-export + placeholder for future user roles
+│   │   └── roles.ts           # MessageRole re-export (single import site)
 │   ├── types/
-│   │   ├── common.types.ts    # AuthUser, JwtPayload, AIRequestInput, AIResponse
+│   │   ├── common.types.ts    # AuthUser, JwtPayload
 │   │   └── express.d.ts        # declaration-merges req.user (no `any`)
 │   ├── utils/
-│   │   ├── errors.ts          # AppError + typed subclasses (400/401/403/404/409)
+│   │   ├── errors.ts          # AppError + typed subclasses (400/401/404/409)
 │   │   ├── apiResponse.ts     # sendSuccess() — consistent envelope
 │   │   ├── asyncHandler.ts    # forwards async errors to the error handler
 │   │   ├── jwt.ts             # signToken / verifyToken
@@ -129,7 +129,20 @@ DATABASE_URL="postgresql://<user>:<password>@localhost:5432/assistiq_db?schema=p
 
 ```bash
 npm run prisma:generate   # generates the typed client
-npm run prisma:migrate    # creates/applies the initial migration (needs a reachable DB)
+npm run prisma:migrate    # creates/applies migrations (needs a reachable DB)
+```
+
+Two migrations make up the current schema:
+
+| Migration                      | What it does                                                                                        |
+| ------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `0_init`                       | The base schema (users, workspaces, bots, knowledge, conversations, messages).                        |
+| `20261002141705_init_rbac`     | Adds the `PlatformRole` and `WorkspaceRole` enums, `users.platformRole`, and the `workspace_members` table. Additive only — no data is dropped. |
+
+After migrating, confirm the RBAC data is consistent:
+
+```bash
+npm run verify:rbac   # every workspace has an OWNER membership matching workspace.ownerId
 ```
 
 > If `prisma migrate` reports **P1000 (authentication failed)**, the server is reachable but
@@ -165,9 +178,10 @@ with a clear message if any are invalid.
 | `DATABASE_URL`       | **yes**  | —             | PostgreSQL connection string                              |
 | `JWT_SECRET`         | **yes**  | —             | ≥ 16 chars; use a strong random value in production       |
 | `JWT_EXPIRES_IN`     | no       | `7d`          | e.g. `1h`, `7d`                                           |
-| `AI_SERVICE_MODE`    | no       | `mock`        | `mock` (Review 1) \| `live` (future Python service)       |
-| `AI_SERVICE_URL`     | no       | —             | Base URL of the Python service (used when `live`)         |
-| `AI_SERVICE_API_KEY` | no       | —             | Sent as `x-api-key` to the Python service (when `live`)   |
+| `AI_SERVICE_URL`     | no       | —             | Base URL of the Python FastAPI service                    |
+| `AI_SERVICE_TIMEOUT` | no       | `30000`       | Per-request timeout (ms); uploads use 3× this value       |
+| `AI_SERVICE_API_KEY` | **yes**  | —             | Sent as `X-API-Key`; must equal the AI service's own value. There is no disabled mode — the AI service rejects requests without it |
+| `PLATFORM_OWNER_EMAIL` | no     | —             | Account promoted to `PLATFORM_OWNER` by `npm run db:seed`  |
 | `CORS_ORIGIN`        | no       | `*`           | `*`, or a comma-separated allowlist                       |
 | `LOG_LEVEL`          | no       | `info`        | pino level (`silent` in tests)                            |
 
@@ -181,8 +195,11 @@ Base path: **`/api/v1`**. All responses use a consistent envelope:
 // success
 { "success": true,  "message": "…", "data": { … } }
 // error
-{ "success": false, "message": "…" }
+{ "success": false, "error": "…", "message": "…" }
 ```
+
+> On errors `error` is the canonical field and `message` mirrors it for backwards
+> compatibility with existing clients.
 
 `GET /health` is public and lives **outside** `/api/v1`.
 
@@ -276,15 +293,19 @@ cross-tenant id simply returns `null` → **404** (never a 403, so we don't even
 resource exists):
 
 ```ts
-// workspace:    scoped to the caller
-prisma.workspace.findFirst({ where: { id, ownerId } })
-// bot:          bot -> workspace -> ownerId
-prisma.bot.findFirst({ where: { id: botId, workspace: { ownerId } } })
-// knowledge:    knowledge -> bot -> workspace -> ownerId
-prisma.knowledgeEntry.findFirst({ where: { id, bot: { workspace: { ownerId } } } })
-// conversation: conversation -> bot -> workspace -> ownerId
-prisma.conversation.findFirst({ where: { id, bot: { workspace: { ownerId } } } })
+// workspace:    scoped to the caller's membership
+prisma.workspace.findFirst({ where: { id, members: { some: { userId } } } })
+// bot:          bot -> workspace -> membership
+prisma.bot.findFirst({ where: { id: botId, workspace: { members: { some: { userId } } } } })
+// knowledge:    knowledge -> bot -> workspace -> membership
+prisma.knowledgeEntry.findFirst({ where: { id, bot: { workspace: { members: { some: { userId } } } } } })
+// conversation: conversation -> bot -> workspace -> membership
+prisma.conversation.findFirst({ where: { id, bot: { workspace: { members: { some: { userId } } } } } })
 ```
+
+Membership (not `ownerId`) is the gate, so ADMIN and AGENT members are admitted alongside the
+owner. `workspace.ownerId` is kept during the transition and `npm run verify:rbac` proves the
+two stay in step; it is no longer what authorization reads. See **Authorization (RBAC)** below.
 
 Creating a child resource **first asserts ownership of the parent** using the same pattern,
 then inserts. The owner id always comes from the **verified token**, never from the request
@@ -299,27 +320,89 @@ production.
 
 ---
 
-## AI service boundary
+## Authorization (RBAC)
 
-All AI communication is isolated in [`src/services/ai.service.ts`](src/services/ai.service.ts),
-which exposes a single contract:
+Authorization is layered **on top of** the ownership rule above, and never replaces it: the
+service-layer scoping is what makes the isolation survive even if the middleware is removed.
 
-```ts
-generateResponse(input: AIRequestInput): Promise<AIResponse>
-// AIResponse = { answer: string; intent?: string; confidence?: number; shouldEscalate?: boolean }
+### Two independent domains
+
+| Domain        | Role lives on                  | Roles                       | Gates                                 |
+| ------------- | ------------------------------ | --------------------------- | ------------------------------------- |
+| **Platform**  | `User.platformRole`            | `USER`, `PLATFORM_OWNER`     | `/api/v1/platform/*`, `/api/v1/admin/ai/*` |
+| **Workspace** | `WorkspaceMember.role`         | `OWNER`, `ADMIN`, `AGENT`    | everything scoped to a workspace      |
+
+They are evaluated independently. A `PLATFORM_OWNER` who is only an `AGENT` in a workspace
+stays an `AGENT` there, and a platform owner who is **not** a member of a workspace gets the
+same `404` as anyone else — the platform role grants nothing inside the workspace domain.
+
+### Permissions
+
+Permissions are named `<resource>:<action>` and defined once in
+[`src/constants/permissions.ts`](src/constants/permissions.ts), which also holds the
+role → permission matrix. Routes reference `PERMISSIONS.*` and never an inline string, so the
+matrix is the single source of truth.
+
+| Role    | Can                                                                                  | Cannot                                        |
+| ------- | ------------------------------------------------------------------------------------ | --------------------------------------------- |
+| `OWNER` | everything, including `members:manage` and workspace settings                          | —                                             |
+| `ADMIN` | manage bots, knowledge and documents; reply/resolve/assign conversations                | manage members, update or delete the workspace |
+| `AGENT` | read workspace/knowledge context, reply to and resolve conversations                   | view or manage bots, manage knowledge, manage members, assign conversations |
+
+### Denial semantics (important)
+
+- **No workspace membership → `404`**, never `403`. A tenant the caller cannot see must be
+  indistinguishable from one that does not exist, so the pre-RBAC isolation guarantee holds.
+- **Member whose role lacks the permission → `403`.**
+- **Not authenticated → `401`**, checked before any authorization runs.
+
+Enforcement lives in [`src/middleware/authorization.middleware.ts`](src/middleware/authorization.middleware.ts):
+`requireWorkspacePermission(permission, scope)` and `requirePlatformOwner()`. Routes carrying no
+workspace id declare how to resolve one — `{ from: 'bot' }`, `{ from: 'knowledge' }` or
+`{ from: 'conversation' }`. The platform role is re-read from the database rather than trusted
+from the JWT, so a promotion or demotion applies immediately to already-issued tokens.
+
+### Platform owners
+
+`PLATFORM_OWNER` is what unlocks the AI Lab (`/api/v1/admin/ai/*`) and platform administration
+(`/api/v1/platform/*`); both are closed to ordinary users. To create one, register the account
+first and then set `PLATFORM_OWNER_EMAIL` in the environment and run:
+
+```bash
+npm run db:seed   # backfills OWNER memberships and promotes PLATFORM_OWNER_EMAIL
 ```
 
-- **`AI_SERVICE_MODE=mock`** (Review 1 default): a dependency-free keyword-overlap match
-  against the bot's FAQ knowledge. **This is not ML** — it only exercises the request/response
-  and escalation contract. The backend runs **fully offline**; no Python service is required.
-- **`AI_SERVICE_MODE=live`** (future): `fetch(`${AI_SERVICE_URL}/api/v1/generate`)` with an
-  `x-api-key` header and a 15s timeout. Failures are logged and surfaced as a graceful `502` —
-  internal details are never leaked to the client.
+The seed is idempotent and safe to re-run.
+
+### Tests
+
+[`tests/rbac-matrix.test.ts`](tests/rbac-matrix.test.ts) drives the real route table across
+every role — including a non-member and a non-member platform owner — and asserts that a denied
+request returns the right status **and writes nothing**. [`tests/rbac-compat.test.ts`](tests/rbac-compat.test.ts)
+pins the service-layer scope predicates that the rollback story depends on.
+
+---
+
+## AI service boundary
+
+All AI communication is isolated in [`src/services/aiServiceClient.ts`](src/services/aiServiceClient.ts),
+a singleton that wraps `fetch` and is the **only** place the backend talks to Python:
+
+- **Core:** `chat()` → `POST /api/v1/chat`, `ingestKnowledge()` → `POST /api/v1/knowledge/ingest`,
+  `deleteBotKnowledge()` → `DELETE /api/v1/knowledge/{botId}`, `classifyIntent()` →
+  `POST /api/v1/ml/classify`, `ingestDocument()` → `POST /api/v1/knowledge/ingest-document`.
+- **Admin/testing (proxied under `/api/v1/admin/ai/*`):** `searchVectors`, `getAiStatus`,
+  `getMlStatus`, `evaluateMlModel`, `getSystemStatus`, `getVectorStats`, `debugChatPipeline`.
+
+Every request is bounded by `AbortSignal.timeout(AI_SERVICE_TIMEOUT)` (uploads use 3×).
+Any transport failure or non-2xx response is mapped to a `502` with a generic message —
+internal details are never leaked to the client. `AI_SERVICE_URL` must be configured or the
+call fails fast with a `500`.
 
 The **conversation service** orchestrates the chat flow (`addMessage`): verify ownership →
-store the `USER` message → gather the bot's knowledge → `generateResponse` → store the
-`ASSISTANT` message → return both plus AI metadata. Controllers never call the AI service
-directly. Swapping mock → live is a **config change, not a refactor**.
+store the `USER` message → call `aiServiceClient.chat()` → flip the conversation to
+`WAITING_FOR_HUMAN` when `fallback_required` → store the `ASSISTANT` message → return both
+plus AI metadata. Controllers never call the AI service directly.
 
 ---
 
@@ -363,11 +446,7 @@ Vitest + Supertest. Prisma and the AI service are **mocked** (`vi.mock`), so tes
 
 Intentionally **not** built in Review 1, and where the architecture already leaves room:
 
-- **Real AI/ML service** — Python/FastAPI with RAG, embeddings, and a vector store; enabled by
-  flipping `AI_SERVICE_MODE=live` (the boundary already exists).
-- **Roles & team members** — workspace membership, invitations, and role-based authorization
-  (the single-owner model and `constants/roles.ts` placeholder are the seam).
-- **Human handoff** — act on the AI's `shouldEscalate` signal to route conversations to agents.
+- **Human handoff** — act on the AI's `fallback_required` signal to route conversations to agents.
 - **Document upload** — ingest PDFs/URLs into the knowledge base for RAG.
 - **Server-side logout** — a token blacklist / refresh-token rotation to replace stateless
   client-side logout.

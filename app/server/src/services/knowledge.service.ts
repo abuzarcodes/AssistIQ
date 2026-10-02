@@ -7,13 +7,13 @@ import { aiServiceClient } from './aiServiceClient.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../utils/errors.js';
 
-/** Add a knowledge (FAQ) entry to a bot the caller owns. */
+/** Add a knowledge (FAQ) entry to a bot in a workspace the caller belongs to. */
 export const createKnowledge = async (
   botId: string,
-  ownerId: string,
+  userId: string,
   input: CreateKnowledgeInput
 ): Promise<KnowledgeEntry> => {
-  await getBotById(botId, ownerId);
+  await getBotById(botId, userId);
 
   let category = input.category;
   if (!category) {
@@ -54,12 +54,12 @@ export const createKnowledge = async (
   return entry;
 };
 
-/** List a bot's knowledge entries (after asserting ownership of the bot). */
+/** List a bot's knowledge entries (after asserting access to the bot). */
 export const listKnowledgeByBot = async (
   botId: string,
-  ownerId: string
+  userId: string
 ): Promise<KnowledgeEntry[]> => {
-  await getBotById(botId, ownerId);
+  await getBotById(botId, userId);
 
   return prisma.knowledgeEntry.findMany({
     where: { botId },
@@ -68,15 +68,15 @@ export const listKnowledgeByBot = async (
 };
 
 /**
- * Fetch a knowledge entry the caller owns via the full chain
- * (entry -> bot -> workspace -> owner), or throw 404.
+ * Fetch a knowledge entry via the full chain (entry -> bot -> workspace -> membership),
+ * or throw 404. A non-member gets the same 404 as a missing entry.
  */
 export const getKnowledgeById = async (
   knowledgeId: string,
-  ownerId: string
+  userId: string
 ): Promise<KnowledgeEntry> => {
   const entry = await prisma.knowledgeEntry.findFirst({
-    where: { id: knowledgeId, bot: { workspace: { ownerId } } },
+    where: { id: knowledgeId, bot: { workspace: { members: { some: { userId } } } } },
   });
 
   if (!entry) {
@@ -86,13 +86,13 @@ export const getKnowledgeById = async (
   return entry;
 };
 
-/** Update a knowledge entry after asserting ownership. */
+/** Update a knowledge entry after asserting workspace membership. */
 export const updateKnowledge = async (
   knowledgeId: string,
-  ownerId: string,
+  userId: string,
   input: UpdateKnowledgeInput
 ): Promise<KnowledgeEntry> => {
-  await getKnowledgeById(knowledgeId, ownerId);
+  await getKnowledgeById(knowledgeId, userId);
 
   return prisma.knowledgeEntry.update({
     where: { id: knowledgeId },
@@ -105,14 +105,14 @@ export const updateKnowledge = async (
   });
 };
 
-/** Delete a knowledge entry after asserting ownership. */
-export const deleteKnowledge = async (knowledgeId: string, ownerId: string): Promise<void> => {
+/** Delete a knowledge entry after asserting workspace membership. */
+export const deleteKnowledge = async (knowledgeId: string, _userId: string): Promise<void> => {
   throw new AppError('Deleting specific knowledge entries is coming soon. Please delete all knowledge for the bot.', 501);
 };
 
 /** Delete all knowledge entries for a bot */
-export const deleteAllKnowledge = async (botId: string, ownerId: string): Promise<void> => {
-  await getBotById(botId, ownerId);
+export const deleteAllKnowledge = async (botId: string, userId: string): Promise<void> => {
+  await getBotById(botId, userId);
   await prisma.knowledgeEntry.deleteMany({ where: { botId } });
   
   try {

@@ -64,9 +64,26 @@ class VectorStoreService:
     async def add_documents(
         self, bot_id: str, chunks: List[Dict[str, Any]], embeddings: List[List[float]]
     ) -> int:
-        """Batch insert document chunks and embeddings."""
-        if not self.pool or not chunks or len(chunks) != len(embeddings):
+        """Batch insert document chunks and embeddings.
+
+        Raises rather than returning 0 when the store cannot accept the write. A silent 0
+        is indistinguishable from "there was nothing to insert", which turns an unreachable
+        database into a success report — see the note on `connect()` failing at startup.
+        """
+        if not chunks:
+            # Genuinely nothing to do — the only case where 0 is an honest answer.
             return 0
+
+        if not self.pool:
+            raise RuntimeError(
+                "Vector store is not connected. Check DATABASE_URL in the AI service .env and "
+                "that the pgvector database is running (see app/Ai/docker-compose.yml)."
+            )
+
+        if len(chunks) != len(embeddings):
+            raise ValueError(
+                f"Refusing to store: {len(chunks)} chunks but {len(embeddings)} embeddings."
+            )
 
         query = f"""
         INSERT INTO {self.table_name} 

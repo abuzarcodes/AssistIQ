@@ -4,26 +4,37 @@ import { NotFoundError } from '../utils/errors.js';
 import type { CreateWorkspaceInput } from '../schemas/workspace.schema.js';
 
 /** Create a workspace owned by the given user. */
-export const createWorkspace = (ownerId: string, input: CreateWorkspaceInput): Promise<Workspace> =>
-  prisma.workspace.create({ data: { name: input.name, ownerId } });
+export const createWorkspace = (userId: string, input: CreateWorkspaceInput): Promise<Workspace> =>
+  prisma.workspace.create({
+    data: {
+      name: input.name,
+      // Both records are written, deliberately: `ownerId` is the legacy single-owner field
+      // kept during the RBAC transition, and the `WorkspaceMember` row is the RBAC source of
+      // truth. The nested write is one statement, so a workspace can never exist without an
+      // OWNER membership.
+      ownerId: userId,
+      members: { create: { userId, role: 'OWNER' } },
+    },
+  });
 
-/** List all workspaces owned by the given user. */
-export const listWorkspaces = (ownerId: string): Promise<Workspace[]> =>
+/** List every workspace the user is a member of (any role). */
+export const listWorkspaces = (userId: string): Promise<Workspace[]> =>
   prisma.workspace.findMany({
-    where: { ownerId },
+    where: { members: { some: { userId } } },
     orderBy: { createdAt: 'desc' },
   });
 
 /**
- * Fetch a workspace the user owns, or throw 404.
+ * Fetch a workspace the user is a member of, or throw 404.
  *
- * The `ownerId` is part of the query, so another user's workspace is indistinguishable
- * from a non-existent one — no cross-tenant existence leak (spec §7). Reused as the
- * ownership gate whenever a child resource is created under a workspace.
+ * Membership (not `ownerId`) is the gate, so ADMIN and AGENT members are admitted. A caller
+ * with no membership receives the same 404 as a caller asking for a non-existent workspace —
+ * no cross-tenant existence leak (spec §7). Reused as the gate whenever a child resource is
+ * created under a workspace.
  */
-export const getWorkspaceById = async (workspaceId: string, ownerId: string): Promise<Workspace> => {
+export const getWorkspaceById = async (workspaceId: string, userId: string): Promise<Workspace> => {
   const workspace = await prisma.workspace.findFirst({
-    where: { id: workspaceId, ownerId },
+    where: { id: workspaceId, members: { some: { userId } } },
   });
 
   if (!workspace) {

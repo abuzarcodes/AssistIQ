@@ -29,7 +29,14 @@ export const verifyToken = (token: string): JwtPayload => {
       typeof decoded.sub === 'string' &&
       typeof (decoded as Record<string, unknown>).email === 'string'
     ) {
-      return { sub: decoded.sub, email: decoded.email as string };
+      const raw = decoded as Record<string, unknown>;
+      // platformRole is optional: tokens minted before RBAC simply lack it, and the
+      // platform guard re-reads the authoritative role from the DB regardless.
+      const platformRole =
+        raw.platformRole === 'PLATFORM_OWNER' || raw.platformRole === 'USER'
+          ? raw.platformRole
+          : undefined;
+      return { sub: decoded.sub, email: decoded.email as string, platformRole };
     }
     throw new AuthenticationError('Invalid authentication token');
   } catch (error) {

@@ -22,6 +22,7 @@ vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prism
 
 const { default: app } = await import('../src/app.js');
 const { hashPassword } = await import('../src/utils/password.js');
+const { signToken } = await import('../src/utils/jwt.js');
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -109,6 +110,42 @@ describe('POST /api/v1/auth/login', () => {
 
     expect(res.status).toBe(401);
     expect(res.body.message).toBe('Invalid email or password');
+  });
+});
+
+describe('POST /api/v1/auth/logout', () => {
+  it('accepts a logout and reports success (200)', async () => {
+    const res = await request(app).post('/api/v1/auth/logout');
+
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+  });
+
+  it('does NOT invalidate the token server-side — the same token still authenticates', async () => {
+    // The documented contract (src/controllers/auth.controller.ts): JWTs are stateless, so
+    // logout is a client-side discard and the endpoint deliberately does not pretend
+    // otherwise. A token blacklist is a Review 2 item. Pinned so the limitation stays
+    // visible instead of being assumed away.
+    const token = signToken({ sub: 'user-1', email: 'john@example.com' });
+    prismaMock.user.findUnique.mockResolvedValue({
+      id: 'user-1',
+      name: 'John Doe',
+      email: 'john@example.com',
+      platformRole: 'USER',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    });
+
+    const loggedOut = await request(app)
+      .post('/api/v1/auth/logout')
+      .set('Authorization', `Bearer ${token}`);
+    expect(loggedOut.status).toBe(200);
+
+    // The token issued before the logout is still accepted.
+    const after = await request(app)
+      .get('/api/v1/users/me')
+      .set('Authorization', `Bearer ${token}`);
+    expect(after.status).toBe(200);
   });
 });
 

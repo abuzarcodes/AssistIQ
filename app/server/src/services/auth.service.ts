@@ -27,7 +27,11 @@ export const register = async (input: RegisterInput): Promise<AuthResult> => {
     select: userSafeSelect,
   });
 
-  const token = signToken({ sub: user.id, email: user.email });
+  const token = signToken({
+    sub: user.id,
+    email: user.email,
+    platformRole: user.platformRole,
+  });
   return { user, token };
 };
 
@@ -46,7 +50,11 @@ export const login = async (input: LoginInput): Promise<AuthResult> => {
     throw new AuthenticationError('Invalid email or password');
   }
 
-  const token = signToken({ sub: user.id, email: user.email });
+  const token = signToken({
+    sub: user.id,
+    email: user.email,
+    platformRole: user.platformRole,
+  });
   return { user: toSafeUser(user), token };
 };
 

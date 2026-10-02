@@ -1,7 +1,6 @@
 import { env } from '../config/env.js';
 import { logger } from '../config/logger.js';
 import { AppError } from '../utils/errors.js';
-import type { AIKnowledgeItem } from '../types/common.types.js';
 
 // Define the payload structures based on Python FastAPI endpoints
 export interface ChatPayload {
@@ -43,7 +42,7 @@ export interface ClassifyResponse {
   confidence: number;
 }
 
-const AI_REQUEST_TIMEOUT_MS = process.env.AI_SERVICE_TIMEOUT ? parseInt(process.env.AI_SERVICE_TIMEOUT) : 30000;
+const AI_REQUEST_TIMEOUT_MS = env.AI_SERVICE_TIMEOUT;
 
 class AIServiceClient {
   private get baseUrl() {
@@ -53,11 +52,19 @@ class AIServiceClient {
     return env.AI_SERVICE_URL;
   }
 
-  private get headers() {
-    return {
+  private get headers(): Record<string, string> {
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
-      // If there is an API key mechanism in the future, add it here
     };
+
+    // Service-to-service authentication (Checkpoint 5). The Python service rejects any
+    // request without the shared secret, so a missing key fails loudly rather than
+    // silently reaching an unprotected AI service.
+    if (env.AI_SERVICE_API_KEY) {
+      headers['X-API-Key'] = env.AI_SERVICE_API_KEY;
+    }
+
+    return headers;
   }
 
   private async request<T>(endpoint: string, options: RequestInit): Promise<T> {
@@ -163,6 +170,8 @@ class AIServiceClient {
   /**
    * Forward a FormData (multipart) request to the AI service.
    * Does NOT set Content-Type so fetch auto-generates the multipart boundary.
+   * The API key is still sent — this path bypasses `this.headers`, so it must add
+   * the credential itself or document uploads would be rejected by the AI service.
    */
   private async requestFormData<T>(endpoint: string, formData: FormData): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
@@ -171,6 +180,7 @@ class AIServiceClient {
       const response = await fetch(url, {
         method: 'POST',
         body: formData,
+        headers: env.AI_SERVICE_API_KEY ? { 'X-API-Key': env.AI_SERVICE_API_KEY } : undefined,
         signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS * 3), // longer timeout for file uploads
       });
 

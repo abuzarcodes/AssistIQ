@@ -45,7 +45,38 @@ class KnowledgeService:
             return {"success": False, "error": "Embedding mismatch"}
 
         # 3. Storage
-        chunks_inserted = await self.vector_store.add_documents(bot_id, all_chunks, embeddings)
+        try:
+            chunks_inserted = await self.vector_store.add_documents(bot_id, all_chunks, embeddings)
+        except Exception as e:
+            # Fail the ingestion loudly. Previously a disconnected vector store produced
+            # "Successfully ingested 0 chunks" and `success: True`, so an unreachable
+            # database was reported to the caller as a completed ingestion.
+            logger.error(
+                f"Failed to store {len(all_chunks)} chunks for bot {bot_id}: {e}",
+                extra=format_log_context(
+                    operation="ingest_knowledge",
+                    bot_id=bot_id,
+                    entries=len(entries),
+                ),
+            )
+            return {"success": False, "error": f"Vector store unavailable: {e}"}
+
+        if chunks_inserted != len(all_chunks):
+            # Belt and braces: the store reports how many rows it wrote, so a partial write
+            # is never mistaken for a complete one.
+            logger.error(
+                f"Stored {chunks_inserted} of {len(all_chunks)} chunks for bot {bot_id}",
+                extra=format_log_context(
+                    operation="ingest_knowledge",
+                    bot_id=bot_id,
+                    entries=len(entries),
+                    chunks=chunks_inserted,
+                ),
+            )
+            return {
+                "success": False,
+                "error": f"Stored {chunks_inserted} of {len(all_chunks)} chunks",
+            }
 
         logger.info(
             f"Successfully ingested {chunks_inserted} chunks for bot {bot_id}",

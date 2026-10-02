@@ -37,15 +37,27 @@ const normalize = (err: unknown): NormalizedError => {
     return { statusCode: 400, message: 'Invalid database query' };
   }
 
+  // Multer upload errors (oversized/malformed multipart) are client errors, not 500s.
+  // Matched by name so the error handler does not depend on multer directly.
+  if (err instanceof Error && err.name === 'MulterError') {
+    const code = (err as Error & { code?: string }).code;
+    if (code === 'LIMIT_FILE_SIZE') {
+      return { statusCode: 413, message: 'File too large. Maximum size is 10 MB.' };
+    }
+    return { statusCode: 400, message: 'Invalid file upload.' };
+  }
+
   return { statusCode: 500, message: 'Internal Server Error' };
 };
 
 /**
  * Centralized error middleware (spec §16/§17).
  *
- * Produces the standard error envelope `{ success: false, message }` and never leaks
- * stack traces, DB internals, or secrets. Unexpected (5xx) errors are logged at error
- * level; expected client errors (4xx) are logged at debug to avoid noise.
+ * Produces the standard error envelope `{ success: false, error, message }` and never
+ * leaks stack traces, DB internals, or secrets. `error` is the canonical field; `message`
+ * is kept as a backwards-compatible alias for existing clients. Unexpected (5xx) errors
+ * are logged at error level; expected client errors (4xx) are logged at debug to avoid
+ * noise.
  */
 export const errorHandler = (
   err: unknown,
@@ -64,6 +76,7 @@ export const errorHandler = (
 
   res.status(statusCode).json({
     success: false,
+    error: message,
     message,
     // Stack is only ever exposed outside production, and only for genuine errors.
     ...(!isProduction && err instanceof Error ? { stack: err.stack } : {}),

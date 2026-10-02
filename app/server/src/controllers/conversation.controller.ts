@@ -7,10 +7,10 @@ import type { CreateMessageInput } from "../schemas/conversation.schema.js";
 
 export const createConversation = asyncHandler(
   async (req: Request, res: Response) => {
-    const { id: ownerId } = getAuthUser(req);
+    const { id: userId } = getAuthUser(req);
     const conversation = await conversationService.createConversation(
       req.params.botId,
-      ownerId,
+      userId,
     );
     sendSuccess(res, conversation, "Conversation created", 201);
   },
@@ -18,10 +18,10 @@ export const createConversation = asyncHandler(
 
 export const listConversations = asyncHandler(
   async (req: Request, res: Response) => {
-    const { id: ownerId } = getAuthUser(req);
+    const { id: userId } = getAuthUser(req);
     const conversations = await conversationService.listConversationsByBot(
       req.params.botId,
-      ownerId,
+      userId,
     );
     sendSuccess(res, conversations, "Conversations retrieved", 200);
   },
@@ -29,10 +29,10 @@ export const listConversations = asyncHandler(
 
 export const getConversation = asyncHandler(
   async (req: Request, res: Response) => {
-    const { id: ownerId } = getAuthUser(req);
+    const { id: userId } = getAuthUser(req);
     const conversation = await conversationService.getConversationById(
       req.params.conversationId,
-      ownerId,
+      userId,
     );
     sendSuccess(res, conversation, "Conversation retrieved", 200);
   },
@@ -40,11 +40,11 @@ export const getConversation = asyncHandler(
 
 /** POST /conversations/:conversationId/messages — the Review 1 chat flow (spec §14). */
 export const sendMessage = asyncHandler(async (req: Request, res: Response) => {
-  const { id: ownerId } = getAuthUser(req);
+  const { id: userId } = getAuthUser(req);
   const { content } = req.body as CreateMessageInput;
   const result = await conversationService.addMessage(
     req.params.conversationId,
-    ownerId,
+    userId,
     content,
   );
   sendSuccess(res, result, "Message processed", 201);

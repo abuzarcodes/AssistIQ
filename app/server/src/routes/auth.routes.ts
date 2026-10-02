@@ -13,7 +13,11 @@ const authRateLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  message: { success: false, message: 'Too many attempts. Please try again later.' },
+  message: {
+    success: false,
+    error: 'Too many attempts. Please try again later.',
+    message: 'Too many attempts. Please try again later.',
+  },
 });
 
 const router = Router();

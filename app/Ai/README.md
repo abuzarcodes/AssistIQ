@@ -17,7 +17,12 @@ The pipeline follows this exact flow:
 ## Prerequisites
 
 1. **Python 3.10+**
-2. **PostgreSQL with pgvector**: The database must have `CREATE EXTENSION vector;` executed.
+2. **PostgreSQL with pgvector** — the RAG pipeline stores embeddings in a `vector` column, so
+   the database must have the `vector` extension available. A plain `postgres` image does
+   **not** ship it. This service keeps its vector store in its own instance, separate from the
+   application database the Express server owns; [`docker-compose.yml`](docker-compose.yml)
+   starts a `pgvector/pgvector:pg16` container on port **5433** for it. The AI service creates
+   the extension and the `knowledge_chunks` table itself on startup.
 3. API Keys (Optional if using free tiers):
    - OpenAI (for embeddings/LLM)
    - Gemini / Google AI Studio (Free LLM tier)
@@ -25,32 +30,47 @@ The pipeline follows this exact flow:
 
 ## Setup
 
-1. **Create Virtual Environment**:
+1. **Start the vector store**:
+   ```bash
+   docker compose up -d      # pgvector on localhost:5433
+   ```
+   Its password comes from `VECTOR_DB_PASSWORD` in `.env` and must match the password in
+   `DATABASE_URL`. Getting this wrong is not silent: ingestion fails with a 500 rather than
+   reporting zero chunks stored.
+
+2. **Create Virtual Environment**:
    ```bash
    python -m venv .venv
    source .venv/bin/activate  # On Windows: .venv\Scripts\activate
    ```
 
-2. **Install Dependencies**:
+3. **Install Dependencies**:
    ```bash
    pip install -r requirements.txt
    ```
 
-3. **Configure Environment**:
+4. **Configure Environment**:
    Copy `.env.example` to `.env` and fill in your keys. To run completely free:
    - `LLM_PROVIDER="gemini"` (Get key from Google AI Studio)
    - `EMBEDDING_PROVIDER="huggingface"` (Runs locally, no key needed)
 
-4. **Train the ML Model**:
+5. **Train the ML Model**:
    You must train the intent classifier before starting the server.
    ```bash
    python -m app.ml.training.train
    ```
 
-5. **Run the Server**:
+6. **Run the Server**:
    ```bash
    uvicorn app.main:app --reload --port 8000
    ```
+
+Verify the store is reachable — this should report `"status": "connected"` with a chunk count,
+not `"disconnected"`:
+
+```bash
+curl -H "X-API-Key: $AI_SERVICE_API_KEY" http://localhost:8000/api/v1/testing/vector-store/stats
+```
 
 ## Demo & Testing Endpoints
 

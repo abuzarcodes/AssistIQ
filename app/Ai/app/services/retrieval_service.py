@@ -1,4 +1,10 @@
-"""Retrieval Service placeholder supporting multi-tenant document context lookup."""
+"""Retrieval Service placeholder supporting multi-tenant document context lookup.
+
+EXPERIMENTAL / PLACEHOLDER: ``search_context`` returns a hardcoded mock document and
+does NOT query pgvector. It exists only to keep the experimental LangGraph pipeline
+(``POST /api/v1/ai/chat``) runnable. The production retrieval path is
+``app/services/rag_service.py`` against ``app/services/vector_store_service.py``.
+"""
 
 from typing import List, Optional
 from app.schemas.ai import SourceDocument

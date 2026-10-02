@@ -19,18 +19,53 @@ enum MessageRole {
   SYSTEM
 }
 
+/// Platform-level (global, application-wide) authorization role. Deliberately separate
+/// from workspace roles — a PLATFORM_OWNER is NOT automatically a workspace OWNER.
+/// Seeded via PLATFORM_OWNER_EMAIL; there is no self-promotion API.
+enum PlatformRole {
+  USER
+  PLATFORM_OWNER
+}
+
+/// Per-workspace membership role (see the RBAC role-permission matrix).
+enum WorkspaceRole {
+  OWNER
+  ADMIN
+  AGENT
+}
+
 model User {
-  id           String   @id @default(uuid())
+  id           String       @id @default(uuid())
   name         String
-  email        String   @unique
+  email        String       @unique
   passwordHash String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  platformRole PlatformRole @default(USER)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
 
   // A user owns one or more workspaces (Review 1 uses a single-owner model).
   workspaces Workspace[]
+  // RBAC: explicit per-workspace membership (added alongside `ownerId` during transition).
+  memberships WorkspaceMember[]
 
   @@map("users")
+}
+
+model WorkspaceMember {
+  id          String        @id @default(uuid())
+  userId      String
+  workspaceId String
+  role        WorkspaceRole
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, workspaceId])
+  @@index([workspaceId])
+  @@index([userId])
+  @@map("workspace_members")
 }
 
 model Workspace {
@@ -40,8 +75,9 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner User  @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  bots  Bot[]
+  owner   User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  bots    Bot[]
+  members WorkspaceMember[]
 
   @@index([ownerId])
   @@map("workspaces")

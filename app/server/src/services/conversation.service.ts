@@ -5,21 +5,21 @@ import { getBotById } from './bot.service.js';
 import { aiServiceClient, type ChatResponse } from './aiServiceClient.js';
 import { MessageRole } from '../constants/roles.js';
 
-/** Create a conversation under a bot the caller owns. */
+/** Create a conversation under a bot in a workspace the caller belongs to. */
 export const createConversation = async (
   botId: string,
-  ownerId: string
+  userId: string
 ): Promise<Conversation> => {
-  await getBotById(botId, ownerId);
+  await getBotById(botId, userId);
   return prisma.conversation.create({ data: { botId } });
 };
 
-/** List a bot's conversations (after asserting ownership of the bot). */
+/** List a bot's conversations (after asserting access to the bot). */
 export const listConversationsByBot = async (
   botId: string,
-  ownerId: string
+  userId: string
 ): Promise<Conversation[]> => {
-  await getBotById(botId, ownerId);
+  await getBotById(botId, userId);
   return prisma.conversation.findMany({
     where: { botId },
     orderBy: { createdAt: 'desc' },
@@ -28,13 +28,13 @@ export const listConversationsByBot = async (
 
 export type ConversationWithMessages = Conversation & { messages: Message[] };
 
-/** Fetch a conversation the caller owns, including its messages in chronological order. */
+/** Fetch a conversation in a workspace the caller belongs to, with messages in order. */
 export const getConversationById = async (
   conversationId: string,
-  ownerId: string
+  userId: string
 ): Promise<ConversationWithMessages> => {
   const conversation = await prisma.conversation.findFirst({
-    where: { id: conversationId, bot: { workspace: { ownerId } } },
+    where: { id: conversationId, bot: { workspace: { members: { some: { userId } } } } },
     include: { messages: { orderBy: { createdAt: 'asc' } } },
   });
 
@@ -45,13 +45,13 @@ export const getConversationById = async (
   return conversation;
 };
 
-/** Lightweight ownership gate that also yields the conversation's botId. */
+/** Lightweight scope gate that also yields the conversation's botId. */
 const getOwnedConversation = async (
   conversationId: string,
-  ownerId: string
+  userId: string
 ): Promise<{ id: string; botId: string }> => {
   const conversation = await prisma.conversation.findFirst({
-    where: { id: conversationId, bot: { workspace: { ownerId } } },
+    where: { id: conversationId, bot: { workspace: { members: { some: { userId } } } } },
     select: { id: true, botId: true },
   });
 
@@ -70,7 +70,7 @@ export interface SendMessageResult {
 
 /**
  * The Review 1 chat flow (spec §14):
- *   1-2. Validate the conversation exists and belongs to the caller.
+ *   1-2. Validate the conversation exists and the caller belongs to its workspace.
  *   3.   Store the USER message.
  *   4.   Gather the bot's knowledge and call the AI service boundary.
  *   5.   Store the ASSISTANT message.
@@ -81,10 +81,10 @@ export interface SendMessageResult {
  */
 export const addMessage = async (
   conversationId: string,
-  ownerId: string,
+  userId: string,
   content: string
 ): Promise<SendMessageResult> => {
-  const conversation = await getOwnedConversation(conversationId, ownerId);
+  const conversation = await getOwnedConversation(conversationId, userId);
 
   const userMessage = await prisma.message.create({
     data: { conversationId, role: MessageRole.USER, content },

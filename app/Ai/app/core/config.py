@@ -33,19 +33,18 @@ class Settings(BaseSettings):
     EMBEDDING_DIMENSION: int = 1536  # Default dimension for openai. 384 for huggingface.
 
     # Database Configuration (PostgreSQL + pgvector)
-    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/assistiq"
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/assistiq_db"
     VECTOR_STORE_TABLE: str = "knowledge_chunks"
 
-    # Redis Cache & Queue Configuration
-    REDIS_URL: str = "redis://localhost:6379/0"
+    # Service-to-Service Authentication
+    # Shared secret the Node backend must present in the `X-API-Key` header.
+    # Empty means "not configured" — protected routes then refuse every request (503)
+    # rather than accepting unauthenticated traffic. See `app/core/auth.py`.
+    AI_SERVICE_API_KEY: str = ""
 
-    # Express Backend Communication
-    EXPRESS_BACKEND_URL: str = "http://localhost:5000"
-    INTERNAL_API_KEY: str = "dev_internal_secret_key"
-    
     # AI Pipeline Thresholds
     CLASSIFICATION_CONFIDENCE_THRESHOLD: float = 0.60
-    RETRIEVAL_CONFIDENCE_THRESHOLD: float = 0.20
+    RETRIEVAL_CONFIDENCE_THRESHOLD: float = 0.65
     
     # Chunking Configuration
     CHUNK_SIZE: int = 800

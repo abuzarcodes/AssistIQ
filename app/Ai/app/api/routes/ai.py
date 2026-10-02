@@ -1,4 +1,17 @@
-"""AI functionality API endpoints."""
+"""AI functionality API endpoints.
+
+Two chat pipelines exist in this service and they are NOT the same thing:
+
+* ``POST /api/v1/chat`` (see ``app/api/routes/chat.py``) is the **production**
+  pipeline — classify -> topic-filter -> pgvector retrieval -> grounded LLM ->
+  fallback. It is the only chat path the Express backend calls.
+* ``POST /api/v1/ai/chat`` (below) is an **experimental** LangGraph variant used
+  for local exploration and exercised by ``tests/test_ai.py``. It is not called by
+  the Express backend or the browser, and its retrieval node currently runs against
+  a placeholder/mock context provider (see ``app/services/retrieval_service.py``).
+  It is kept intentionally so the experimental graph stays runnable; do not wire it
+  into the production path without moving it off the mock retriever.
+"""
 
 from fastapi import APIRouter, Depends, status
 from app.schemas.ai import AIChatRequest, AIChatResponse, AIStatusResponse, SourceDocument
@@ -33,12 +46,16 @@ async def get_ai_status(
     "/chat",
     response_model=AIChatResponse,
     status_code=status.HTTP_200_OK,
-    summary="Process AI Chat Query",
+    summary="[EXPERIMENTAL] Process AI Chat Query (LangGraph)",
 )
 async def chat_with_ai(
     payload: AIChatRequest,
 ):
-    """Process incoming chat query using LangGraph RAG pipeline."""
+    """EXPERIMENTAL: run the LangGraph RAG workflow (retrieve -> generate).
+
+    Not the production chat path — use ``POST /api/v1/chat`` for that. Kept so the
+    experimental graph remains runnable; retrieval currently uses a mock provider.
+    """
     # Execute LangGraph workflow
     result = await run_agent_graph(
         question=payload.message,

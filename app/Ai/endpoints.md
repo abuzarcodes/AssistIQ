@@ -1,5 +1,9 @@
 # AssistIQ AI Service - API Endpoints
 
+> **Two chat pipelines exist.** `POST /api/v1/chat` is the production pipeline used by
+> the Express backend. `POST /api/v1/ai/chat` is an **experimental** LangGraph variant
+> (not called by the backend or the browser; its retrieval node uses a mock provider).
+
 ## openapi
 **Path:** `/openapi.json`
 
@@ -59,7 +63,7 @@
 
 **Methods:** `POST`
 
-**Description:** Process incoming chat query using LangGraph RAG pipeline.
+**Description:** [EXPERIMENTAL] Process incoming chat query using the LangGraph RAG pipeline. Not the production chat path.
 
 ---
 
@@ -96,6 +100,15 @@
 **Methods:** `POST`
 
 **Description:** Ingest structured knowledge entries, chunk them, embed, and store in vector database.
+
+---
+
+## ingest_document
+**Path:** `/api/v1/knowledge/ingest-document`
+
+**Methods:** `POST`
+
+**Description:** Upload a PDF or DOCX file (multipart: `file`, `bot_id`, `topic`), extract text, and ingest into the RAG pipeline.
 
 ---
 

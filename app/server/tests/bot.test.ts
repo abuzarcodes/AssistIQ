@@ -3,16 +3,32 @@ import request from 'supertest';
 
 const prismaMock = vi.hoisted(() => ({
   user: { findUnique: vi.fn(), create: vi.fn() },
-  workspace: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
-  bot: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), update: vi.fn(), delete: vi.fn() },
+  workspaceMember: {
+    findUnique: vi.fn(),
+    findFirst: vi.fn(),
+    findMany: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
+  workspace: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn() },
+  bot: {
+    create: vi.fn(),
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+  },
   knowledgeEntry: {
     create: vi.fn(),
     findMany: vi.fn(),
     findFirst: vi.fn(),
+    findUnique: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
   },
-  conversation: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn() },
+  conversation: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn() },
   message: { create: vi.fn() },
 }));
 
@@ -29,12 +45,27 @@ const BOT_ID = '22222222-2222-2222-2222-222222222222';
 const authHeader = (user: { id: string; email: string }): string =>
   `Bearer ${signToken({ sub: user.id, email: user.email })}`;
 
+/** The workspace the bot belongs to, as resolved by the middleware's 'bot' scope. */
+const botBelongsToWorkspace = (workspaceId = WORKSPACE_ID) =>
+  prismaMock.bot.findUnique.mockResolvedValue({ workspaceId });
+
+const membership = (userId: string, role: 'OWNER' | 'ADMIN' | 'AGENT') =>
+  prismaMock.workspaceMember.findUnique.mockResolvedValue({
+    id: 'member-1',
+    userId,
+    workspaceId: WORKSPACE_ID,
+    role,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe('POST /api/v1/workspaces/:workspaceId/bots', () => {
-  it('creates a bot after confirming the caller owns the workspace (201)', async () => {
+  it('creates a bot when the caller may manage bots in the workspace (201)', async () => {
+    membership(USER_A.id, 'OWNER');
     prismaMock.workspace.findFirst.mockResolvedValue({
       id: WORKSPACE_ID,
       name: 'Support',
@@ -58,16 +89,11 @@ describe('POST /api/v1/workspaces/:workspaceId/bots', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.data.name).toBe('Helper');
-    // Ownership of the parent workspace is asserted (scoped to the caller) before insert.
-    expect(prismaMock.workspace.findFirst).toHaveBeenCalledWith({
-      where: { id: WORKSPACE_ID, ownerId: USER_A.id },
-    });
     expect(prismaMock.bot.create).toHaveBeenCalled();
   });
 
-  it('cannot create a bot in a workspace owned by another user (404)', async () => {
-    // User B does not own the workspace, so the ownership gate finds nothing.
-    prismaMock.workspace.findFirst.mockResolvedValue(null);
+  it('rejects a non-member with 404 and creates nothing', async () => {
+    prismaMock.workspaceMember.findUnique.mockResolvedValue(null);
 
     const res = await request(app)
       .post(`/api/v1/workspaces/${WORKSPACE_ID}/bots`)
@@ -77,24 +103,51 @@ describe('POST /api/v1/workspaces/:workspaceId/bots', () => {
     expect(res.status).toBe(404);
     expect(prismaMock.bot.create).not.toHaveBeenCalled();
   });
+
+  it('rejects an AGENT with 403 (no bots:manage) and creates nothing', async () => {
+    membership(USER_B.id, 'AGENT');
+
+    const res = await request(app)
+      .post(`/api/v1/workspaces/${WORKSPACE_ID}/bots`)
+      .set('Authorization', authHeader(USER_B))
+      .send({ name: 'Sneaky' });
+
+    expect(res.status).toBe(403);
+    expect(prismaMock.bot.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('GET /api/v1/bots/:botId (tenant isolation)', () => {
-  it('returns 404 when the bot belongs to another user', async () => {
-    prismaMock.bot.findFirst.mockResolvedValue(null);
+  it('returns 404 when the bot does not exist / is not reachable', async () => {
+    prismaMock.bot.findUnique.mockResolvedValue(null);
 
     const res = await request(app)
       .get(`/api/v1/bots/${BOT_ID}`)
       .set('Authorization', authHeader(USER_B));
 
     expect(res.status).toBe(404);
-    // Isolation is enforced by joining bot -> workspace -> ownerId in the query.
-    expect(prismaMock.bot.findFirst).toHaveBeenCalledWith({
-      where: { id: BOT_ID, workspace: { ownerId: USER_B.id } },
+    // The workspace is resolved through the bot before any membership check.
+    expect(prismaMock.bot.findUnique).toHaveBeenCalledWith({
+      where: { id: BOT_ID },
+      select: { workspaceId: true },
     });
   });
 
-  it('returns the bot to its owner (200)', async () => {
+  it('returns 404 when the caller is not a member of the bot’s workspace', async () => {
+    botBelongsToWorkspace();
+    prismaMock.workspaceMember.findUnique.mockResolvedValue(null);
+
+    const res = await request(app)
+      .get(`/api/v1/bots/${BOT_ID}`)
+      .set('Authorization', authHeader(USER_B));
+
+    expect(res.status).toBe(404);
+    expect(prismaMock.bot.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('returns the bot to a member and scopes the query to their membership (200)', async () => {
+    botBelongsToWorkspace();
+    membership(USER_A.id, 'ADMIN');
     prismaMock.bot.findFirst.mockResolvedValue({
       id: BOT_ID,
       name: 'Helper',
@@ -110,5 +163,8 @@ describe('GET /api/v1/bots/:botId (tenant isolation)', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data.id).toBe(BOT_ID);
+    expect(prismaMock.bot.findFirst).toHaveBeenCalledWith({
+      where: { id: BOT_ID, workspace: { members: { some: { userId: USER_A.id } } } },
+    });
   });
 });

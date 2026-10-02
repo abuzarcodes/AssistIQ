@@ -19,11 +19,16 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(16, 'JWT_SECRET must be at least 16 characters'),
   JWT_EXPIRES_IN: z.string().default('7d'),
 
-  // AI/ML service boundary. In Review 1 the backend defaults to "mock" and runs
-  // fine with the Python service absent.
-  AI_SERVICE_MODE: z.enum(['mock', 'live']).default('mock'),
+  // AI/ML service boundary (the Python FastAPI service).
   AI_SERVICE_URL: z.string().url().optional().or(z.literal('')),
+  // Per-request timeout in milliseconds for calls to the AI service.
+  AI_SERVICE_TIMEOUT: z.coerce.number().int().positive().default(30000),
+  // Shared secret the Python service requires in the `X-API-Key` header (Checkpoint 5).
   AI_SERVICE_API_KEY: z.string().optional(),
+
+  // RBAC: the email of the user promoted to PLATFORM_OWNER by the seed script.
+  // Optional — when unset the seed simply skips platform-owner promotion.
+  PLATFORM_OWNER_EMAIL: z.string().email().optional().or(z.literal('')),
 
   CORS_ORIGIN: z.string().default('*'),
   LOG_LEVEL: z
