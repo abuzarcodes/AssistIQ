@@ -3,7 +3,10 @@
 from typing import Optional
 from app.core.config import settings
 from app.core.logging import logger, format_log_context
+from app.core.redaction import redact
 from app.providers import ProviderModelRef, get_provider
+from app.providers.base import fault_for
+from app.providers.openai_wire import classify_error
 
 
 class LLMService:
@@ -125,12 +128,28 @@ class LLMService:
                 return f"[Placeholder AI Response] Unsupported LLM provider '{self.provider}'."
 
         except Exception as err:
+            # This branch used to log `str(err)` verbatim — the one place in the service
+            # that put a vendor's own words into a log unredacted, and vendor auth errors
+            # routinely quote the key straight back. The text still gets logged, because
+            # it is what makes the failure diagnosable, but through `redact` and in its own
+            # field rather than spliced into the message.
+            #
+            # `classify_error` is the same classifier the catalog adapters use, so both
+            # paths report a failure the same way even though only one of them is typed.
+            kind, status = classify_error(err)
             logger.error(
                 "Failed to invoke LLM provider: %s",
-                str(err),
+                kind.value,
                 extra=format_log_context(
                     operation="llm_generate",
+                    provider=self.provider,
+                    kind=kind.value,
+                    fault=fault_for(kind).value,
+                    provider_status=status,
                     error_type=err.__class__.__name__,
+                    provider_message=redact(
+                        str(err), redact_also=(prompt, system_message or "")
+                    ),
                 ),
             )
             return f"[Fallback Response] Unable to contact LLM service. Query was: '{prompt}'."

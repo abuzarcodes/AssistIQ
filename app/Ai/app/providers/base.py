@@ -60,6 +60,52 @@ class ProviderErrorKind(str, Enum):
     UNKNOWN = "UNKNOWN"
 
 
+class ProviderFault(str, Enum):
+    """Whose problem a failure is.
+
+    A `kind` says what to *do*; it deliberately does not say whose fault it is, and those
+    are different questions. `AUTH` and `UPSTREAM` both mean "report a model failure", but
+    one is fixed by rotating a key in this service's environment and the other is fixed by
+    nobody here at all. Logging the fault alongside the kind is what lets an operator
+    decide in one glance whether to open their own `.env` or the provider's status page.
+    """
+
+    #: A configuration or integration fault on this side — a missing or rejected
+    #: credential, a model id we sent that does not exist, an adapter never deployed.
+    OURS = "ours"
+    #: The provider's own fault. Nothing here to fix.
+    PROVIDER = "provider"
+    #: Not attributable without guessing. Used where the evidence genuinely does not
+    #: distinguish the two sides; the `kind` still carries the specific failure.
+    UNKNOWN = "unknown"
+
+
+#: Total by design: every kind maps to a fault, and
+#: `test_every_kind_has_a_fault` fails if a kind is added without one. A new kind that
+#: silently defaulted to `unknown` would be a diagnostic that lies about how much is known.
+_FAULTS: dict[ProviderErrorKind, ProviderFault] = {
+    ProviderErrorKind.NOT_CONFIGURED: ProviderFault.OURS,
+    # A rejected key, a permission denial or an unfunded account are all remedied by the
+    # same operator action here, and none of them is the provider malfunctioning.
+    ProviderErrorKind.AUTH: ProviderFault.OURS,
+    # A 400 is overwhelmingly "the model id we sent does not exist" — our catalog's
+    # problem, not theirs.
+    ProviderErrorKind.BAD_REQUEST: ProviderFault.OURS,
+    ProviderErrorKind.UNKNOWN_PROVIDER: ProviderFault.OURS,
+    ProviderErrorKind.RATE_LIMIT: ProviderFault.PROVIDER,
+    ProviderErrorKind.UPSTREAM: ProviderFault.PROVIDER,
+    # A timeout could be our egress or their latency, and this code cannot tell which.
+    # Blaming the provider would send an operator to a status page that is already green.
+    ProviderErrorKind.TIMEOUT: ProviderFault.UNKNOWN,
+    ProviderErrorKind.UNKNOWN: ProviderFault.UNKNOWN,
+}
+
+
+def fault_for(kind: ProviderErrorKind) -> ProviderFault:
+    """The fault class for `kind`, defaulting to `UNKNOWN` for a kind added but not mapped."""
+    return _FAULTS.get(kind, ProviderFault.UNKNOWN)
+
+
 #: Fixed, non-echoing messages. A provider exception's own text is never used as the
 #: message: it can contain the request URL, headers, or fragments of the prompt.
 _DEFAULT_MESSAGES: dict[ProviderErrorKind, str] = {
@@ -83,8 +129,10 @@ class ProviderError(AssistIQAIException):
     chat pipeline maps it to a reason-coded response well before that (Checkpoint 6);
     this is the floor, not the policy.
 
-    `message` is always one of the fixed strings above. The original exception is kept
-    on `cause` for logs only — never rendered.
+    `message` is always one of the fixed strings above — it is what a customer-facing
+    fallback is built from, so it never echoes the provider. The original exception is kept
+    on `cause` and *is* logged, but only through `app.core.redaction.redact`, which removes
+    every configured credential and the prompt before the text reaches a record.
     """
 
     def __init__(
@@ -110,10 +158,15 @@ class ProviderError(AssistIQAIException):
             },
         )
         self.kind = kind
+        #: Whose fault it is. Carried on the exception so every log site reports the same
+        #: answer without re-deriving it — and deliberately **not** placed in `details`,
+        #: which is serialised into the HTTP error envelope and is a contract with Node.
+        self.fault = fault_for(kind)
         self.provider = provider
         self.model_id = model_id
         self.provider_status = status_code
-        #: The underlying exception, for logging only. Never serialised.
+        #: The underlying exception, for logging only. Never serialised — and never logged
+        #: raw: its text goes through `app.core.redaction.redact` first.
         self.cause: Optional[BaseException] = None
 
 

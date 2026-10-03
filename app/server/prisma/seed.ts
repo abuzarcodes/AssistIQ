@@ -67,16 +67,22 @@ const promotePlatformOwner = async (): Promise<void> => {
 };
 
 /**
- * Starter catalog (Checkpoint 1). Providers are seeded rather than created through the API
- * because a provider row is meaningful only once a Python adapter for its `slug` exists.
+ * Starter catalog. Providers are seeded rather than created through the API
+ * because a provider row is meaningful only once a Python adapter for its `slug` exists —
+ * and there is deliberately no "create provider" endpoint, since that would need a second
+ * registry of which slugs exist. `slug` here must be spelled exactly as the adapter's
+ * `slug` in the AI service's `app/providers/registry.py`.
  *
  * Every row is seeded `enabled: false` — the seed must never change platform behaviour on
  * its own; each switch is thrown deliberately by a platform owner in the UI.
  *
- * `providerModelId` values are OpenRouter-native ids and MUST be verified against
- * OpenRouter's live model list before being enabled. A wrong id surfaces at chat time as
+ * `providerModelId` values are provider-native ids and MUST be verified against each
+ * provider's live model list before being enabled. A wrong id surfaces at chat time as
  * `MODEL_UNAVAILABLE`; because the field is immutable the fix is delete-and-recreate, which
  * is safe for a never-enabled model because no bot can reference it yet.
+ *
+ * These are *starters*, not a curated catalog: model lineups move faster than this file
+ * will, and an operator is expected to add what they actually want.
  */
 const STARTER_CATALOG: ReadonlyArray<{
   provider: { slug: string; name: string; description: string };
@@ -93,6 +99,55 @@ const STARTER_CATALOG: ReadonlyArray<{
       { providerModelId: 'anthropic/claude-sonnet-4', displayName: 'Claude Sonnet 4' },
       { providerModelId: 'google/gemini-2.0-flash', displayName: 'Gemini 2.0 Flash' },
     ],
+  },
+  {
+    provider: {
+      slug: 'openai',
+      name: 'OpenAI',
+      description: 'OpenAI first-party API.',
+    },
+    models: [
+      { providerModelId: 'gpt-4o-mini', displayName: 'GPT-4o mini' },
+      { providerModelId: 'gpt-4o', displayName: 'GPT-4o' },
+    ],
+  },
+  {
+    provider: {
+      // Groq, not Grok. Groq is the fast-inference provider; Grok is xAI's model family
+      // and has its own credential. The AI service reads GROQ_API_KEY for this row.
+      slug: 'groq',
+      name: 'Groq',
+      description: 'Fast inference on open-weight models (OpenAI-compatible).',
+    },
+    models: [
+      { providerModelId: 'llama-3.3-70b-versatile', displayName: 'Llama 3.3 70B Versatile' },
+      { providerModelId: 'llama-3.1-8b-instant', displayName: 'Llama 3.1 8B Instant' },
+    ],
+  },
+  {
+    provider: {
+      slug: 'gemini',
+      name: 'Google Gemini',
+      description: 'Google Gemini via the Google AI API.',
+    },
+    models: [
+      { providerModelId: 'gemini-2.0-flash', displayName: 'Gemini 2.0 Flash' },
+      { providerModelId: 'gemini-1.5-flash', displayName: 'Gemini 1.5 Flash' },
+    ],
+  },
+  {
+    provider: {
+      slug: 'openai_compatible',
+      name: 'OpenAI-Compatible',
+      // The name is presentation and can be renamed from the platform dashboard; the
+      // endpoint and credential are configuration and live in the AI service's
+      // environment, never in this database.
+      description:
+        'Any service exposing an OpenAI-compatible API. Endpoint and credential are configured on the AI service.',
+    },
+    // Deliberately empty: the usable model ids depend entirely on which service this slot
+    // is pointed at, so seeding guesses would only give an operator rows to delete.
+    models: [],
   },
 ];
 

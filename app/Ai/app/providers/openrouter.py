@@ -4,6 +4,11 @@ OpenRouter speaks the OpenAI wire protocol, so this is `ChatOpenAI` pointed at
 OpenRouter's base URL. The `grok` branch in `llm_service.py` is the closest existing
 analogue and the structure deliberately mirrors it.
 
+The failure taxonomy, the content flattening and the disclosure rules this adapter obeys
+live in `openai_wire.py`, shared with the other OpenAI-wire adapters. What is left here is
+what is genuinely OpenRouter's: where its credential comes from, where to point, and the
+two attribution headers it displays on its dashboard.
+
 Where the credential lives
 --------------------------
 `OPENROUTER_API_KEY` is read from this service's settings and used for exactly one
@@ -20,83 +25,17 @@ descriptor reaches here it has already been authorised. Adding a second opinion 
 would create a second source of truth that can disagree with the first.
 """
 
-import logging
 from typing import Optional
 
 from app.core.config import settings
-from app.core.logging import logger, format_log_context
-from app.providers.base import ProviderError, ProviderErrorKind
+from app.providers.openai_wire import build_messages, classify_error, run_completion
 from app.providers.registry import register
 
-#: Statuses that all mean "our credential is the problem". 403 joins 401/402 because a
-#: permission denial is remedied by the same operator action as a rejected key —
-#: rotating or re-scoping it — and reporting it as UNKNOWN would send that operator
-#: looking in the wrong place.
-_AUTH_STATUSES = frozenset({401, 402, 403})
-
-
-def _normalise_content(content) -> str:
-    """Flatten a LangChain message body to plain text.
-
-    Mirrors the openai/grok/gemini branches in `llm_service.py` exactly. It is duplicated
-    rather than extracted because those branches are on the legacy path that must stay
-    provably unchanged while the model path is introduced — refactoring them into a
-    shared helper is a separate, riskier change than this checkpoint warrants.
-    """
-    if isinstance(content, list):
-        return "".join(
-            part.get("text", "") if isinstance(part, dict) else str(part) for part in content
-        )
-    return str(content)
-
-
-def _status_of(err: BaseException) -> Optional[int]:
-    """Pull an HTTP status off an SDK exception, wherever it happens to be.
-
-    `openai` exposes `status_code` directly on most errors and on `err.response` for
-    others; checking both avoids pinning this to one SDK version's attribute layout.
-    """
-    status = getattr(err, "status_code", None)
-    if isinstance(status, int):
-        return status
-
-    response = getattr(err, "response", None)
-    status = getattr(response, "status_code", None)
-    return status if isinstance(status, int) else None
-
-
-def _is_timeout(err: BaseException) -> bool:
-    """Whether the failure was a timeout.
-
-    Checked structurally rather than by importing the SDK's timeout class, so this keeps
-    working if `langchain-openai` changes which exception type it raises.
-    """
-    if isinstance(err, (TimeoutError,)):
-        return True
-    # asyncio.TimeoutError is an alias of TimeoutError on 3.11+, but not on 3.10.
-    return any(cls.__name__ in {"APITimeoutError", "Timeout", "ReadTimeout"} for cls in type(err).__mro__)
-
-
-def classify_error(err: BaseException) -> tuple[ProviderErrorKind, Optional[int]]:
-    """Map a provider exception onto `(kind, status)`.
-
-    The kinds are coarse on purpose: they describe what the caller should *do*, not what
-    the provider said. Several statuses collapsing into one kind is the intended shape.
-    """
-    status = _status_of(err)
-
-    if _is_timeout(err):
-        return ProviderErrorKind.TIMEOUT, status
-    if status == 400:
-        return ProviderErrorKind.BAD_REQUEST, status
-    if status in _AUTH_STATUSES:
-        return ProviderErrorKind.AUTH, status
-    if status == 429:
-        return ProviderErrorKind.RATE_LIMIT, status
-    if status is not None and 500 <= status < 600:
-        return ProviderErrorKind.UPSTREAM, status
-
-    return ProviderErrorKind.UNKNOWN, status
+#: `classify_error` is re-exported rather than merely imported: `tests/test_openrouter.py`
+#: imports it from this module and pins the whole mapping table. Leaving that import path
+#: intact is what makes the extraction into `openai_wire.py` provable — the tests were not
+#: touched, so their passing is evidence the behaviour did not move.
+__all__ = ["OpenRouterProvider", "classify_error"]
 
 
 class OpenRouterProvider:
@@ -136,33 +75,12 @@ class OpenRouterProvider:
     ) -> str:
         """Run a completion against OpenRouter, or raise `ProviderError`.
 
-        An unconfigured adapter raises **before** building a client, so a missing key
-        costs no network round trip and cannot be mistaken for a provider outage.
+        An unconfigured adapter raises before the client is built, so a missing key costs
+        no network round trip and cannot be mistaken for a provider outage.
         """
-        if not self.is_configured:
-            logger.warning(
-                "OpenRouter adapter has no credential configured.",
-                extra=format_log_context(
-                    operation="provider_generate",
-                    provider=self.slug,
-                    model_id=model_id,
-                    kind=ProviderErrorKind.NOT_CONFIGURED.value,
-                ),
-            )
-            raise ProviderError(
-                ProviderErrorKind.NOT_CONFIGURED,
-                provider=self.slug,
-                model_id=model_id,
-            )
 
-        try:
-            from langchain_core.messages import HumanMessage, SystemMessage
+        async def build_call():
             from langchain_openai import ChatOpenAI
-
-            messages = []
-            if system_message:
-                messages.append(SystemMessage(content=system_message))
-            messages.append(HumanMessage(content=prompt))
 
             chat = ChatOpenAI(
                 base_url=settings.OPENROUTER_BASE_URL,
@@ -176,39 +94,20 @@ class OpenRouterProvider:
                 request_timeout=settings.OPENROUTER_REQUEST_TIMEOUT,
                 default_headers=self._headers() or None,
             )
-            response = await chat.ainvoke(messages)
-            return _normalise_content(response.content)
+            response = await chat.ainvoke(build_messages(prompt, system_message))
+            return response.content
 
-        except ProviderError:
-            raise
-        except Exception as err:
-            kind, status = classify_error(err)
-            error = ProviderError(
-                kind,
-                provider=self.slug,
-                model_id=model_id,
-                status_code=status,
-            )
-            error.cause = err
-
-            # A rejected credential is a configuration fault an operator must act on; a
-            # throttle or an upstream wobble is worth knowing about but is not urgent.
-            # Neither the key nor the prompt ever reaches the log record.
-            level = logging.ERROR if kind is ProviderErrorKind.AUTH else logging.WARNING
-            logger.log(
-                level,
-                "OpenRouter call failed: %s",
-                kind.value,
-                extra=format_log_context(
-                    operation="provider_generate",
-                    provider=self.slug,
-                    model_id=model_id,
-                    kind=kind.value,
-                    provider_status=status,
-                    error_type=err.__class__.__name__,
-                ),
-            )
-            raise error from err
+        return await run_completion(
+            slug=self.slug,
+            label="OpenRouter",
+            model_id=model_id,
+            configured=self.is_configured,
+            build_call=build_call,
+            # The prompt and system message are handed over purely so the failure log can
+            # strip them back out: a provider that quotes the request in its error would
+            # otherwise write the customer's message into this service's log.
+            redact_also=(prompt, system_message or ""),
+        )
 
 
 #: Registration happens at import time, and the registry does the importing (see

@@ -145,7 +145,7 @@ Three migrations make up the current schema:
 > The catalog migration is **additive and non-destructive** by design: `aiModelId` is
 > nullable, so no bot is forced onto a model, and `Restrict` (rather than `Cascade`) means
 > deleting a catalog entry that a bot still points at fails loudly instead of silently
-> unassigning tenants. The `ai_models` row is seeded with the OpenRouter provider
+> unassigning tenants. The `ai_models` row is seeded with every provider
 > **disabled** — the catalog changes nothing until a platform owner turns it on.
 
 After migrating, confirm the RBAC data is consistent:
@@ -529,7 +529,8 @@ here, in Node, and the resulting native id travels only on the **server-to-serve
 override at all, and the AI service falls back to its own configured default: that is the
 pre-catalog behaviour, preserved exactly.
 
-**The server holds no provider credential.** There is no `OPENROUTER_API_KEY` in
+**The server holds no provider credential.** There is no `OPENROUTER_API_KEY`,
+`GROQ_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, or `OPENAI_COMPATIBLE_API_KEY` in
 `src/config/env.ts` and none is expected — provider keys live only in the Python service's
 environment. This is why the platform catalog reports readiness rather than probing a provider:
 Node has nothing to probe with, and deliberately never will.

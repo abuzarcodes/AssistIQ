@@ -19,6 +19,7 @@ from app.core.constants import (
     INTENT_GENERAL_SUPPORT
 )
 from app.core.logging import logger, format_log_context
+from app.core.redaction import redact
 
 #: How a typed provider failure is reported to the customer (Checkpoint 6).
 #:
@@ -177,14 +178,21 @@ class ChatService:
         The response shape is identical to every other fallback, which is the point: Node
         needs no new branch, and `fallback_required` alone drives the escalation.
 
-        Logged with provenance the customer never sees — the provider, the model id, and the
-        failure kind are what make this diagnosable from the AI service log, and none of them
-        are in the message or the response body. The underlying exception is *not* rendered:
-        its text can echo the request URL and headers. `openrouter.py` already logged at
-        `ERROR` for a rejected credential and `WARNING` otherwise; this line is the
-        pipeline-level summary, at the same severity, carrying the reason code Node will see.
+        Logged with everything needed to tell a platform misconfiguration from a provider
+        outage — the provider, the model id, the failure kind, and whether the fault is ours
+        or theirs — none of which appear in the message or the response body. This is the
+        second line for a provider failure: the adapter already logged one with the HTTP
+        status and the provider's own words (redacted). This one adds the bot and the reason
+        code Node will see, at the same severity, so the two can be read together.
+
+        The provider's exception *is* rendered here, through `redact`, which removes every
+        configured credential and the prompt before the text reaches the record.
         """
         reason = reason_for_provider_error(err)
+
+        # The prompt lives on `debug_info` for this request; reusing it here keeps the
+        # redaction honest without threading two more parameters through the pipeline.
+        generation = debug_info.get("generation") or {}
         context = format_log_context(
             operation="chat_provider_failure",
             bot_id=bot_id,
@@ -192,7 +200,16 @@ class ChatService:
             model_id=err.model_id,
             reason=reason,
             kind=err.kind.value,
+            fault=err.fault.value,
             provider_status=err.provider_status,
+            provider_message=(
+                redact(
+                    str(err.cause),
+                    redact_also=(generation.get("user_prompt", ""), generation.get("system_prompt", "")),
+                )
+                if err.cause is not None
+                else None
+            ),
         )
 
         if reason == FALLBACK_REASON_MODEL_UNAVAILABLE:
