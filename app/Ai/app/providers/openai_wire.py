@@ -25,13 +25,13 @@ the other side of it.
 """
 
 import logging
-from typing import Awaitable, Callable, List, Optional, Sequence
+from typing import Awaitable, Callable, Dict, List, Optional, Sequence
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from app.core.logging import logger, format_log_context
 from app.core.redaction import redact
-from app.providers.base import ProviderError, ProviderErrorKind, ProviderFault
+from app.providers.base import GenerationParams, ProviderError, ProviderErrorKind, ProviderFault
 
 #: Statuses that all mean "our credential is the problem". 403 joins 401/402 because a
 #: permission denial is remedied by the same operator action as a rejected key —
@@ -52,6 +52,78 @@ def build_messages(prompt: str, system_message: Optional[str]) -> List:
         messages.append(SystemMessage(content=system_message))
     messages.append(HumanMessage(content=prompt))
     return messages
+
+
+#: The generation parameters the OpenAI wire protocol accepts, and therefore the ones every
+#: adapter speaking it can send. Declared here because it is a property of the *protocol*,
+#: which is what this module exists to hold; an adapter still assigns it to its own
+#: `supported_params`, so a vendor that diverts from the protocol can override it in the one
+#: place that is about that vendor.
+OPENAI_WIRE_PARAMS: frozenset = frozenset(
+    {"temperature", "top_p", "frequency_penalty", "presence_penalty", "max_tokens"}
+)
+
+#: The generation parameters this function intersects, in the order they are reported when
+#: dropped. Ordered rather than sorted so a debug line reads like the config UI the operator
+#: just used.
+#:
+#: `temperature` is deliberately **absent**: it is not part of the intersection because it is
+#: the one parameter this protocol predates `GenerationParams` with, and `base.resolve_temperature`
+#: owns it outright — one value, one owner, one place to read the precedence. It stays in
+#: `OPENAI_WIRE_PARAMS` above, which is the capability *declaration*; this tuple is the
+#: filter's input, and those are different questions.
+_PARAM_NAMES: tuple = ("top_p", "frequency_penalty", "presence_penalty", "max_tokens")
+
+
+def build_client_kwargs(
+    supported: frozenset,
+    params: Optional[GenerationParams],
+) -> Dict[str, object]:
+    """Intersect requested generation parameters with what an adapter can actually send.
+
+    This is the **only** place the two sets of capability knowledge meet, and the rule is
+    simple: a value is sent when it was asked for *and* the adapter declares it supports
+    it. Anything else is **dropped, not sent**, never coerced and never substituted — a
+    provider that receives a parameter it does not understand may reject the whole request,
+    and an invented substitute would be a decision this layer has no standing to make.
+
+    Dropping is logged once per field at DEBUG. Not WARNING: a capability mismatch is the
+    normal consequence of swapping a model (an operator moves a bot from an OpenAI model to
+    a Gemini one and the penalties simply stop being sent), and logging a routine
+    configuration at warning level is how a log stops being read.
+
+    Dropped field names go in their own context field rather than interpolated into the
+    message, matching `format_log_context`'s use everywhere else. They are parameter names,
+    never values and never credentials.
+
+    `temperature` is not handled here — see `_PARAM_NAMES` and `base.resolve_temperature`.
+    """
+    if params is None:
+        return {}
+
+    requested = {name: getattr(params, name) for name in _PARAM_NAMES}
+
+    kwargs: Dict[str, object] = {}
+    dropped: List[str] = []
+    for name, value in requested.items():
+        if value is None:
+            continue
+        if name not in supported:
+            dropped.append(name)
+            continue
+        kwargs[name] = value
+
+    if dropped:
+        logger.debug(
+            "Dropping generation parameters this adapter cannot send: %s",
+            ", ".join(dropped),
+            extra=format_log_context(
+                operation="provider_param_filter",
+                unsupported_params=",".join(dropped),
+            ),
+        )
+
+    return kwargs
 
 
 def normalise_content(content) -> str:

@@ -2,6 +2,8 @@ import prisma from '../config/database.js';
 import { aiServiceClient } from './aiServiceClient.js';
 import { logger } from '../config/logger.js';
 import { ConflictError, NotFoundError } from '../utils/errors.js';
+import { resolveCapabilities } from '../constants/modelCapabilities.js';
+import type { ModelCapabilities } from '../types/botConfig.types.js';
 import type { CreateModelInput, UpdateModelInput, UpdateProviderInput } from '../schemas/aiCatalog.schema.js';
 
 /**
@@ -362,11 +364,12 @@ export const deleteModel = async (modelId: string): Promise<DeletedModel> => {
 const isForeignKeyViolation = (err: unknown): boolean =>
   typeof err === 'object' && err !== null && (err as { code?: unknown }).code === 'P2003';
 
-/** A catalog entry as a workspace sees it — identity and provider label, nothing more. */
+/** A catalog entry as a workspace sees it — identity, provider label, and capabilities. */
 export interface SelectableModel {
   id: string;
   displayName: string;
   provider: { slug: string; name: string };
+  capabilities: ModelCapabilities;
 }
 
 /**
@@ -377,14 +380,28 @@ export interface SelectableModel {
  * attempt to use it directly — precisely the catalog bypass the API is built to prevent.
  * This projection is also the reason the shape is not simply `listModels()` filtered: the
  * platform view *does* carry `providerModelId` and bot counts, and this one must not.
+ *
+ * **`capabilities` is served here rather than through a second request.** The configuration
+ * UI has to grey out the controls a model cannot honour (§12.3), and it needs that answer
+ * while rendering the model selector. Folding it into this projection means the client never
+ * has to ask "which model is selected?" and then "what does it support?" as two round trips
+ * that can disagree. The resolution mirrors the config endpoint's: an explicit per-model
+ * `capabilities` JSON wins field by field over the provider default.
  */
-export const listSelectableModels = async (): Promise<SelectableModel[]> =>
-  prisma.aIModel.findMany({
+export const listSelectableModels = async (): Promise<SelectableModel[]> => {
+  const rows = await prisma.aIModel.findMany({
     where: { enabled: true, provider: { enabled: true } },
     select: {
       id: true,
       displayName: true,
+      capabilities: true,
       provider: { select: { slug: true, name: true } },
     },
     orderBy: [{ provider: { name: 'asc' } }, { displayName: 'asc' }],
   });
+
+  return rows.map(({ capabilities, ...model }) => ({
+    ...model,
+    capabilities: resolveCapabilities({ capabilities, provider: model.provider }),
+  }));
+};

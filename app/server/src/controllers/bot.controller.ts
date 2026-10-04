@@ -36,14 +36,19 @@ export const deleteBot = asyncHandler(async (req: Request, res: Response) => {
 });
 
 /**
- * Assign or clear a bot's catalog model (Checkpoint 3). Authorization (`bots:manage`) is
- * applied by the route, and membership scoping by the service — this handler only
- * orchestrates. `aiModelId: null` is a valid, successful request: it returns the bot to the
- * platform default.
+ * Assign or clear a bot's models (§10.3). Authorization (`bots:manage`) is applied by the
+ * route, and membership scoping by the service — this handler only orchestrates.
+ *
+ * `null` is a valid, successful value for either field: it returns that slot to the platform
+ * default. Omitting a field leaves it untouched, which is what makes "change just the
+ * fallback" a single-field request rather than a read-modify-write on the client.
  */
 export const assignModel = asyncHandler(async (req: Request, res: Response) => {
   const { id: userId } = getAuthUser(req);
-  const { aiModelId } = req.body as AssignModelInput;
-  const bot = await botService.assignBotModel(req.params.botId, userId, aiModelId);
+  const { aiModelId, fallbackAiModelId } = req.body as AssignModelInput;
+  const bot = await botService.assignBotModel(req.params.botId, userId, {
+    aiModelId,
+    fallbackAiModelId,
+  });
   sendSuccess(res, bot, 'Bot model updated', 200);
 });

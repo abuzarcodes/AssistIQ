@@ -15,7 +15,13 @@ the failure policy is common.
 from typing import Optional
 
 from app.core.config import settings
-from app.providers.openai_wire import build_messages, run_completion
+from app.providers.base import GenerationParams, resolve_temperature
+from app.providers.openai_wire import (
+    OPENAI_WIRE_PARAMS,
+    build_client_kwargs,
+    build_messages,
+    run_completion,
+)
 from app.providers.registry import register
 
 
@@ -23,6 +29,13 @@ class GroqProvider:
     """`LLMProvider` implementation for Groq."""
 
     slug = "groq"
+
+    #: Groq speaks the OpenAI wire protocol, so the same five parameters apply. Verified
+    #: against the installed `langchain-groq`: `top_p` and the penalties are not declared
+    #: fields on `ChatGroq`, but LangChain routes undeclared keyword arguments into
+    #: `model_kwargs`, and `ChatGroq` forwards those to the API — which is where they belong
+    #: for an OpenAI-compatible endpoint.
+    supported_params = OPENAI_WIRE_PARAMS
 
     @property
     def is_configured(self) -> bool:
@@ -35,11 +48,15 @@ class GroqProvider:
         model_id: str,
         system_message: Optional[str] = None,
         temperature: float = 0.0,
+        params: Optional[GenerationParams] = None,
     ) -> str:
         """Run a completion against Groq, or raise `ProviderError`."""
 
         async def build_call():
             from langchain_groq import ChatGroq
+
+            kwargs = build_client_kwargs(self.supported_params, params)
+            kwargs["temperature"] = resolve_temperature(params, temperature)
 
             chat = ChatGroq(
                 # `GROQ_BASE_URL` is the host (`https://api.groq.com`), deliberately without
@@ -49,9 +66,9 @@ class GroqProvider:
                 base_url=settings.GROQ_BASE_URL,
                 model=model_id,
                 api_key=settings.GROQ_API_KEY,
-                temperature=temperature,
                 max_retries=0,
                 request_timeout=settings.GROQ_REQUEST_TIMEOUT,
+                **kwargs,
             )
             response = await chat.ainvoke(build_messages(prompt, system_message))
             return response.content

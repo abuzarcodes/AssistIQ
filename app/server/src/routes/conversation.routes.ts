@@ -6,7 +6,12 @@ import { botIdParamSchema } from '../schemas/bot.schema.js';
 import {
   conversationIdParamSchema,
   createMessageSchema,
+  messageFeedbackParamSchema,
 } from '../schemas/conversation.schema.js';
+import {
+  messageFeedbackSchema,
+  conversationContactSchema,
+} from '../schemas/botConfig.schema.js';
 import * as conversationController from '../controllers/conversation.controller.js';
 
 const botScope = { from: 'bot' } as const;
@@ -47,6 +52,32 @@ router.post(
   validate({ params: conversationIdParamSchema, body: createMessageSchema }),
   requireWorkspacePermission(PERMISSIONS.CONVERSATIONS_REPLY, conversationScope),
   conversationController.sendMessage
+);
+
+// ---------------------------------------------------------------------------------------
+// Feedback and contact (§10.6, §10.7). Both are conversational actions — an agent replying
+// to a customer can rate an answer or record the details the customer gave — so they reuse
+// `conversations:reply` rather than introducing a permission. An AGENT holds it; a non-member
+// still gets 404 through the conversation scope.
+// ---------------------------------------------------------------------------------------
+
+router.post(
+  '/:conversationId/messages/:messageId/feedback',
+  validate({ params: messageFeedbackParamSchema, body: messageFeedbackSchema }),
+  requireWorkspacePermission(PERMISSIONS.CONVERSATIONS_REPLY, conversationScope),
+  conversationController.upsertFeedback
+);
+router.delete(
+  '/:conversationId/messages/:messageId/feedback',
+  validate({ params: messageFeedbackParamSchema }),
+  requireWorkspacePermission(PERMISSIONS.CONVERSATIONS_REPLY, conversationScope),
+  conversationController.deleteFeedback
+);
+router.post(
+  '/:conversationId/contact',
+  validate({ params: conversationIdParamSchema, body: conversationContactSchema }),
+  requireWorkspacePermission(PERMISSIONS.CONVERSATIONS_REPLY, conversationScope),
+  conversationController.upsertContact
 );
 
 export default router;

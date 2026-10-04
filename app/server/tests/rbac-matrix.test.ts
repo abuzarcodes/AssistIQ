@@ -47,6 +47,10 @@ const prismaMock = vi.hoisted(() => ({
     findMany: vi.fn(),
     findFirst: vi.fn(),
     findUnique: vi.fn(),
+    // The configuration read uses `findUniqueOrThrow`: it runs *behind* the `findFirst`
+    // membership gate, so the row's existence is already established and a second
+    // not-found branch would be unreachable code.
+    findUniqueOrThrow: vi.fn(),
     update: vi.fn(),
     delete: vi.fn(),
     count: vi.fn(),
@@ -68,7 +72,47 @@ const prismaMock = vi.hoisted(() => ({
     update: vi.fn(),
     count: vi.fn(),
   },
-  message: { create: vi.fn() },
+  message: { create: vi.fn(), findFirst: vi.fn() },
+  // Feedback and contact (Checkpoint 5). Declared here so the "a denied request writes
+  // nothing" invariant covers the new conversational writes too.
+  messageFeedback: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
+  conversationContact: { upsert: vi.fn() },
+  // Bot configuration and avatars (Checkpoint 2). Declared here so the "a denied request
+  // writes nothing" invariant covers them — a route that buffered an avatar or merged a
+  // config before checking the caller would otherwise pass this sweep unnoticed.
+  botConfiguration: {
+    findUnique: vi.fn(),
+    findUniqueOrThrow: vi.fn(),
+    upsert: vi.fn(),
+    update: vi.fn(),
+    count: vi.fn(),
+  },
+  knowledgeSource: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    delete: vi.fn(),
+    count: vi.fn(),
+    groupBy: vi.fn(),
+  },
+  knowledgeChunk: {
+    findMany: vi.fn(),
+    findFirst: vi.fn(),
+    findUnique: vi.fn(),
+    create: vi.fn(),
+    createMany: vi.fn(),
+    update: vi.fn(),
+    updateMany: vi.fn(),
+    delete: vi.fn(),
+    deleteMany: vi.fn(),
+    count: vi.fn(),
+    // The source list counts each source's enabled chunks with one grouped query, so a
+    // missing mock here would surface as a 500 and be reported as an authorization failure.
+    groupBy: vi.fn(),
+  },
+  platformSetting: { upsert: vi.fn(), update: vi.fn() },
   aIProvider: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
   aIModel: {
     findMany: vi.fn(),
@@ -88,6 +132,15 @@ const aiMock = vi.hoisted(() => ({
   deleteBotKnowledge: vi.fn(),
   getAiStatus: vi.fn(),
   getSystemStatus: vi.fn(),
+  // Chunk mutations. These are mocked rather than left undefined because a route that
+  // reached one of them without permission would throw a TypeError — a 500, which the
+  // sweep reports as a failure of the *authorization* claim instead of the missing mock.
+  reEmbedChunk: vi.fn(),
+  toggleChunkEnabled: vi.fn(),
+  deleteChunkVector: vi.fn(),
+  bulkToggleChunks: vi.fn(),
+  bulkDeleteChunks: vi.fn(),
+  searchVectors: vi.fn(),
 }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
@@ -104,6 +157,7 @@ const KNOWLEDGE_ID = '44444444-4444-4444-4444-444444444444';
 const MEMBER_ID = '55555555-5555-5555-5555-555555555555';
 const MODEL_ID = '66666666-6666-6666-6666-666666666666';
 const PROVIDER_ID = '77777777-7777-7777-7777-777777777777';
+const MESSAGE_ID = '88888888-8888-8888-8888-888888888888';
 
 const authHeader = (): string => `Bearer ${signToken({ sub: USER.id, email: USER.email })}`;
 
@@ -197,10 +251,26 @@ const writeMocks = (): ReturnType<typeof vi.fn>[] => [
   prismaMock.conversation.create,
   prismaMock.conversation.update,
   prismaMock.message.create,
+  prismaMock.knowledgeSource.create,
+  prismaMock.knowledgeSource.update,
+  prismaMock.knowledgeSource.delete,
+  prismaMock.knowledgeChunk.create,
+  prismaMock.knowledgeChunk.createMany,
+  prismaMock.knowledgeChunk.update,
+  prismaMock.knowledgeChunk.updateMany,
+  prismaMock.knowledgeChunk.delete,
+  prismaMock.knowledgeChunk.deleteMany,
+  prismaMock.platformSetting.upsert,
+  prismaMock.platformSetting.update,
   prismaMock.aIProvider.update,
   prismaMock.aIModel.create,
   prismaMock.aIModel.update,
   prismaMock.aIModel.delete,
+  prismaMock.botConfiguration.upsert,
+  prismaMock.botConfiguration.update,
+  prismaMock.messageFeedback.upsert,
+  prismaMock.messageFeedback.delete,
+  prismaMock.conversationContact.upsert,
 ];
 
 const expectNoWrites = (): void => {
@@ -215,8 +285,25 @@ const runCase = async (c: Case) => {
   // first resolves its workspace through params, bot, knowledge entry or conversation.
   // These defaults resolve to the workspace the identities below belong to; the
   // "resource is missing" and "resource is absent" cases override them in `prime`.
-  prismaMock.bot.findUnique.mockResolvedValue({ workspaceId: WORKSPACE_ID });
+  //
+  // `isActive` and the model fields are included because the reply flow resolves the bot's
+  // configuration and models through this same mock; without them a 201 case would pass via
+  // the paused short-circuit rather than by reaching the AI boundary.
+  prismaMock.bot.findUnique.mockResolvedValue({
+    workspaceId: WORKSPACE_ID,
+    isActive: true,
+    aiModelId: null,
+    fallbackAiModelId: null,
+    aiModel: null,
+    fallbackAiModel: null,
+  });
   prismaMock.knowledgeEntry.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+  prismaMock.knowledgeSource.findUnique.mockResolvedValue({
+    bot: { workspaceId: WORKSPACE_ID },
+  });
+  prismaMock.knowledgeChunk.findUnique.mockResolvedValue({
+    bot: { workspaceId: WORKSPACE_ID },
+  });
   prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
 
   if (c.as === 'NON_MEMBER' || c.as === 'PLATFORM_OWNER') {
@@ -344,12 +431,154 @@ describe('bot model assignment (Checkpoint 3)', () => {
     { label: 'OWNER assigns a model to a bot (bots:manage)', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'OWNER', expect: 200, body: { aiModelId: MODEL_ID }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.aIModel.findUnique.mockResolvedValue({ id: MODEL_ID, enabled: true, provider: { enabled: true } }); prismaMock.bot.update.mockResolvedValue(BOT_ROW); } },
     { label: 'ADMIN assigns a model to a bot', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'ADMIN', expect: 200, body: { aiModelId: MODEL_ID }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.aIModel.findUnique.mockResolvedValue({ id: MODEL_ID, enabled: true, provider: { enabled: true } }); prismaMock.bot.update.mockResolvedValue(BOT_ROW); } },
     { label: 'OWNER clears a model assignment with null', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'OWNER', expect: 200, body: { aiModelId: null }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.bot.update.mockResolvedValue(BOT_ROW); } },
+    // The fallback slot rides on the same route and the same gate (§10.3) — assigning one
+    // is not a second, weaker permission.
+    { label: 'OWNER assigns a fallback model', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'OWNER', expect: 200, body: { fallbackAiModelId: MODEL_ID }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.aIModel.findUnique.mockResolvedValue({ id: MODEL_ID, enabled: true, provider: { enabled: true } }); prismaMock.bot.update.mockResolvedValue(BOT_ROW); } },
 
     // AGENT holds neither bots:manage nor bots:view, so the model selector must be closed
     // to it entirely — and, per invariant 2, the denial must write nothing.
     { label: 'AGENT cannot assign a model → 403', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'AGENT', expect: 403, body: { aiModelId: MODEL_ID } },
     { label: 'a non-member assigning a model gets 404', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'NON_MEMBER', expect: 404, body: { aiModelId: MODEL_ID } },
     { label: 'a PLATFORM_OWNER with no membership gets 404 — the platform role grants nothing here', method: 'patch', path: `/api/v1/bots/${BOT_ID}/model`, as: 'PLATFORM_OWNER', expect: 404, body: { aiModelId: MODEL_ID } },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
+/**
+ * Checkpoint 2 — the configuration and avatar surface.
+ *
+ * The split is `bots:view` for the two reads and `bots:manage` for every write, with no new
+ * permission string (plan §10.4). Each write route appears for AGENT as well as for a
+ * non-member, because those are two different failures: a member who lacks the permission
+ * gets 403, a caller with no membership gets 404 and learns nothing.
+ */
+describe('bot configuration routes (Checkpoint 2)', () => {
+  /** The config read needs `bot.findFirst` (the gate) and the stored row. */
+  const readable = () => {
+    prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW);
+    prismaMock.botConfiguration.findUnique.mockResolvedValue(null);
+    prismaMock.bot.findUniqueOrThrow.mockResolvedValue({
+      isActive: true,
+      aiModelId: null,
+      fallbackAiModelId: null,
+      aiModel: null,
+      fallbackAiModel: null,
+    });
+  };
+
+  const writable = () => {
+    readable();
+    prismaMock.botConfiguration.upsert.mockResolvedValue({ version: 1 });
+  };
+
+  const cases: Case[] = [
+    { label: 'OWNER reads the configuration (bots:view)', method: 'get', path: `/api/v1/bots/${BOT_ID}/config`, as: 'OWNER', expect: 200, prime: readable },
+    { label: 'ADMIN reads the configuration', method: 'get', path: `/api/v1/bots/${BOT_ID}/config`, as: 'ADMIN', expect: 200, prime: readable },
+    { label: 'AGENT cannot read the configuration → 403', method: 'get', path: `/api/v1/bots/${BOT_ID}/config`, as: 'AGENT', expect: 403 },
+    { label: 'a non-member reading the configuration gets 404', method: 'get', path: `/api/v1/bots/${BOT_ID}/config`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'OWNER updates the configuration (bots:manage)', method: 'patch', path: `/api/v1/bots/${BOT_ID}/config`, as: 'OWNER', expect: 200, body: { welcomeMessage: 'Hi', expectedVersion: 0 }, prime: writable },
+    { label: 'ADMIN updates the configuration', method: 'patch', path: `/api/v1/bots/${BOT_ID}/config`, as: 'ADMIN', expect: 200, body: { welcomeMessage: 'Hi', expectedVersion: 0 }, prime: writable },
+    { label: 'AGENT cannot update the configuration → 403', method: 'patch', path: `/api/v1/bots/${BOT_ID}/config`, as: 'AGENT', expect: 403, body: { welcomeMessage: 'Hi', expectedVersion: 0 } },
+    { label: 'a non-member updating the configuration gets 404', method: 'patch', path: `/api/v1/bots/${BOT_ID}/config`, as: 'NON_MEMBER', expect: 404, body: { welcomeMessage: 'Hi', expectedVersion: 0 } },
+    { label: 'a PLATFORM_OWNER with no membership gets 404 on update', method: 'patch', path: `/api/v1/bots/${BOT_ID}/config`, as: 'PLATFORM_OWNER', expect: 404, body: { welcomeMessage: 'Hi', expectedVersion: 0 } },
+
+    { label: 'OWNER resets a configuration section', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/reset`, as: 'OWNER', expect: 200, body: { section: 'all', expectedVersion: 0 }, prime: writable },
+    { label: 'ADMIN resets a configuration section', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/reset`, as: 'ADMIN', expect: 200, body: { section: 'all', expectedVersion: 0 }, prime: writable },
+    { label: 'AGENT cannot reset the configuration → 403', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/reset`, as: 'AGENT', expect: 403, body: { section: 'all', expectedVersion: 0 } },
+    { label: 'a non-member resetting the configuration gets 404', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/reset`, as: 'NON_MEMBER', expect: 404, body: { section: 'all', expectedVersion: 0 } },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
+describe('bot configuration preview route (Checkpoint 7)', () => {
+  /** A complete grouped draft; validation runs before authorization, so it must be valid. */
+  const previewDraft = () => ({
+    general: { isActive: true, displayName: null, hasAvatar: false, avatarVersion: 0 },
+    personality: {
+      preset: 'PROFESSIONAL',
+      tone: 'NEUTRAL',
+      customPersonality: null,
+      customInstructions: null,
+      responseLanguage: 'AUTO',
+      responseLength: 'BALANCED',
+    },
+    conversation: {
+      welcomeMessage: null,
+      conversationStarter: null,
+      suggestedQuestions: [],
+      inputPlaceholder: null,
+      thinkingMessages: [],
+      feedbackEnabled: false,
+      feedbackCollectReason: true,
+    },
+    knowledge: { enabled: true, strictness: 'BALANCED', showSources: false, topK: 3 },
+    generation: {
+      temperature: 0,
+      topP: null,
+      frequencyPenalty: null,
+      presencePenalty: null,
+      maxOutputTokens: null,
+    },
+    model: { aiModelId: null, fallbackAiModelId: null },
+    humanSupport: {
+      fallbackEnabled: true,
+      fallbackMessage: null,
+      humanRequestBehavior: 'TRANSFER_AUTOMATICALLY',
+      handoffMessage: null,
+      businessHours: null,
+      contactCollection: null,
+    },
+  });
+
+  const primePreview = () => {
+    prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW);
+    prismaMock.bot.findUniqueOrThrow.mockResolvedValue({ aiModel: null, fallbackAiModel: null });
+    prismaMock.knowledgeSource.findMany.mockResolvedValue([]);
+    aiMock.chat.mockResolvedValue({ status: 'success', response: 'ok', fallback_required: false });
+  };
+
+  const body = { message: 'hi', draft: previewDraft() };
+
+  const cases: Case[] = [
+    { label: 'OWNER previews the configuration (bots:manage)', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/preview`, as: 'OWNER', expect: 200, body, prime: primePreview },
+    { label: 'ADMIN previews the configuration', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/preview`, as: 'ADMIN', expect: 200, body, prime: primePreview },
+    { label: 'AGENT cannot preview → 403', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/preview`, as: 'AGENT', expect: 403, body },
+    { label: 'a non-member previewing gets 404', method: 'post', path: `/api/v1/bots/${BOT_ID}/config/preview`, as: 'NON_MEMBER', expect: 404, body },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
+describe('bot avatar routes (Checkpoint 2)', () => {
+  const withAvatar = () => {
+    prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW);
+    prismaMock.botConfiguration.findUnique.mockResolvedValue({
+      avatarData: new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+      avatarMimeType: 'image/png',
+      avatarUpdatedAt: new Date(),
+      avatarVersion: 1,
+    });
+  };
+
+  const cases: Case[] = [
+    // The read is `bots:view`; the two writes are `bots:manage`. The upload is asserted as a
+    // 403 for AGENT specifically because its guard must precede multer — a 400 from the
+    // parser would mean the body had already been buffered for a caller who may not upload.
+    { label: 'OWNER reads the avatar (bots:view)', method: 'get', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'OWNER', expect: 200, prime: withAvatar },
+    { label: 'ADMIN reads the avatar', method: 'get', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'ADMIN', expect: 200, prime: withAvatar },
+    { label: 'AGENT cannot read the avatar → 403', method: 'get', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'AGENT', expect: 403 },
+    { label: 'a non-member reading the avatar gets 404', method: 'get', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT cannot upload an avatar → 403, refused before multer parses', method: 'post', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'AGENT', expect: 403 },
+    { label: 'a non-member uploading an avatar gets 404', method: 'post', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'OWNER removes the avatar (bots:manage)', method: 'delete', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'OWNER', expect: 200, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.botConfiguration.findUnique.mockResolvedValue({ avatarVersion: 1 }); prismaMock.botConfiguration.update.mockResolvedValue({ avatarVersion: 2 }); } },
+    { label: 'ADMIN removes the avatar', method: 'delete', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'ADMIN', expect: 200, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.botConfiguration.findUnique.mockResolvedValue({ avatarVersion: 1 }); prismaMock.botConfiguration.update.mockResolvedValue({ avatarVersion: 2 }); } },
+    { label: 'AGENT cannot remove the avatar → 403', method: 'delete', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'AGENT', expect: 403 },
+    { label: 'a non-member removing the avatar gets 404', method: 'delete', path: `/api/v1/bots/${BOT_ID}/avatar`, as: 'NON_MEMBER', expect: 404 },
   ];
 
   it.each(cases)('$label', expectCase);
@@ -395,6 +624,84 @@ describe('knowledge routes', () => {
   it.each(cases)('$label', expectCase);
 });
 
+describe('knowledge-source routes', () => {
+  const settingsRow = () => ({
+    id: 'singleton',
+    maxUploadFileSizeBytes: 10 * 1024 * 1024,
+    maxUploadFilesPerRequest: 10,
+    maxUploadTotalBytes: 50 * 1024 * 1024,
+    maxChunksPerSource: 5000,
+    maxChunksPerBot: 0,
+    aiServiceMaxFileSizeBytes: 100 * 1024 * 1024,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  });
+
+  const cases: Case[] = [
+    { label: 'AGENT lists knowledge sources (documents:view)', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-sources`, as: 'AGENT', expect: 200, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.knowledgeSource.findMany.mockResolvedValue([]); prismaMock.knowledgeSource.count.mockResolvedValue(0); prismaMock.knowledgeChunk.groupBy.mockResolvedValue([]); } },
+    { label: 'a non-member listing knowledge sources gets 404', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-sources`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT reads the upload limits (documents:view)', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-sources/upload-limits`, as: 'AGENT', expect: 200, prime: () => prismaMock.platformSetting.upsert.mockResolvedValue(settingsRow()) },
+    { label: 'a non-member reading the upload limits gets 404', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-sources/upload-limits`, as: 'NON_MEMBER', expect: 404 },
+
+    // No multipart body: these assert the guard runs before the parser, so a caller who
+    // may not upload is refused without the request ever being buffered (section 12.5).
+    { label: 'AGENT cannot upload documents (documents:manage) → 403', method: 'post', path: `/api/v1/bots/${BOT_ID}/knowledge-sources/upload`, as: 'AGENT', expect: 403 },
+    { label: 'a non-member uploading documents gets 404', method: 'post', path: `/api/v1/bots/${BOT_ID}/knowledge-sources/upload`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT cannot delete a knowledge source → 403', method: 'delete', path: `/api/v1/knowledge-sources/${KNOWLEDGE_ID}`, as: 'AGENT', expect: 403 },
+    { label: 'a non-member deleting a knowledge source gets 404', method: 'delete', path: `/api/v1/knowledge-sources/${KNOWLEDGE_ID}`, as: 'NON_MEMBER', expect: 404 },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
+describe('knowledge-chunk routes', () => {
+  const chunkRow = () => ({
+    id: KNOWLEDGE_ID,
+    sourceId: KNOWLEDGE_ID,
+    botId: BOT_ID,
+    content: 'Refunds take five business days.',
+    chunkIndex: 0,
+    enabled: true,
+    version: 1,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+    source: { id: KNOWLEDGE_ID, filename: 'handbook.pdf' },
+  });
+
+  const cases: Case[] = [
+    // Reading chunks is granted to every role: an AGENT needs the knowledge context to
+    // answer a customer, and it is the same content the chat reply would retrieve.
+    { label: 'AGENT lists chunks (knowledge:view)', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-chunks`, as: 'AGENT', expect: 200, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.knowledgeChunk.findMany.mockResolvedValue([]); prismaMock.knowledgeChunk.count.mockResolvedValue(0); } },
+    { label: 'a non-member listing chunks gets 404', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-chunks`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT reads chunk stats', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-chunks/stats`, as: 'AGENT', expect: 200, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.knowledgeChunk.count.mockResolvedValue(0); prismaMock.knowledgeSource.count.mockResolvedValue(0); prismaMock.knowledgeSource.groupBy.mockResolvedValue([]); } },
+    { label: 'a non-member reading chunk stats gets 404', method: 'get', path: `/api/v1/bots/${BOT_ID}/knowledge-chunks/stats`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT reads one chunk', method: 'get', path: `/api/v1/knowledge-chunks/${KNOWLEDGE_ID}`, as: 'AGENT', expect: 200, prime: () => prismaMock.knowledgeChunk.findFirst.mockResolvedValue(chunkRow()) },
+    { label: 'a non-member reading a chunk gets 404', method: 'get', path: `/api/v1/knowledge-chunks/${KNOWLEDGE_ID}`, as: 'NON_MEMBER', expect: 404 },
+
+    // Every mutation below is a 403 for an AGENT: `knowledge:manage` is held by OWNER and
+    // ADMIN only, and the write mocks must stay untouched.
+    { label: 'AGENT cannot edit a chunk → 403', method: 'patch', path: `/api/v1/knowledge-chunks/${KNOWLEDGE_ID}`, as: 'AGENT', expect: 403, body: { content: 'Rewritten.' } },
+    { label: 'a non-member editing a chunk gets 404', method: 'patch', path: `/api/v1/knowledge-chunks/${KNOWLEDGE_ID}`, as: 'NON_MEMBER', expect: 404, body: { content: 'Rewritten.' } },
+
+    { label: 'AGENT cannot toggle a chunk → 403', method: 'patch', path: `/api/v1/knowledge-chunks/${KNOWLEDGE_ID}`, as: 'AGENT', expect: 403, body: { enabled: false } },
+
+    { label: 'AGENT cannot delete a chunk → 403', method: 'delete', path: `/api/v1/knowledge-chunks/${KNOWLEDGE_ID}`, as: 'AGENT', expect: 403 },
+    { label: 'a non-member deleting a chunk gets 404', method: 'delete', path: `/api/v1/knowledge-chunks/${KNOWLEDGE_ID}`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT cannot run a bulk action → 403', method: 'post', path: `/api/v1/bots/${BOT_ID}/knowledge-chunks/bulk`, as: 'AGENT', expect: 403, body: { action: 'delete', chunkIds: [KNOWLEDGE_ID] } },
+    { label: 'a non-member running a bulk action gets 404', method: 'post', path: `/api/v1/bots/${BOT_ID}/knowledge-chunks/bulk`, as: 'NON_MEMBER', expect: 404, body: { action: 'delete', chunkIds: [KNOWLEDGE_ID] } },
+
+    { label: 'AGENT runs a retrieval test', method: 'post', path: `/api/v1/bots/${BOT_ID}/knowledge-test`, as: 'AGENT', expect: 200, body: { query: 'refunds' }, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); aiMock.searchVectors.mockResolvedValue({ results: [] }); } },
+    { label: 'a non-member running a retrieval test gets 404', method: 'post', path: `/api/v1/bots/${BOT_ID}/knowledge-test`, as: 'NON_MEMBER', expect: 404, body: { query: 'refunds' } },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
 describe('conversation routes', () => {
   const cases: Case[] = [
     { label: 'AGENT creates a conversation (conversations:view)', method: 'post', path: `/api/v1/bots/${BOT_ID}/conversations`, as: 'AGENT', expect: 201, prime: () => { prismaMock.bot.findFirst.mockResolvedValue(BOT_ROW); prismaMock.conversation.create.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID, status: 'ACTIVE', assignedAgentId: null, createdAt: new Date(), updatedAt: new Date() }); } },
@@ -410,6 +717,44 @@ describe('conversation routes', () => {
     { label: 'AGENT replies to a conversation (conversations:reply)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'AGENT', expect: 201, body: { content: 'On it.' }, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID }); prismaMock.message.create.mockResolvedValue({ id: 'msg', conversationId: CONVERSATION_ID, role: 'USER', content: 'On it.', createdAt: new Date() }); aiMock.chat.mockResolvedValue({ status: 'success', response: 'Hello!', fallback_required: false }); } },
     { label: 'ADMIN replies to a conversation', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'ADMIN', expect: 201, body: { content: 'On it.' }, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID }); prismaMock.message.create.mockResolvedValue({ id: 'msg', conversationId: CONVERSATION_ID, role: 'USER', content: 'On it.', createdAt: new Date() }); aiMock.chat.mockResolvedValue({ status: 'success', response: 'Hello!', fallback_required: false }); } },
     { label: 'a non-member replying gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'NON_MEMBER', expect: 404, body: { content: 'Let me in.' } },
+  ];
+
+  it.each(cases)('$label', expectCase);
+});
+
+/**
+ * Checkpoint 5 — feedback and contact.
+ *
+ * Both are conversational actions, so they reuse `conversations:reply` (an AGENT holds it)
+ * rather than introducing a permission. A non-member must still get 404 through the
+ * conversation scope, and a denied request must write nothing — hence the two mocks being
+ * registered in `writeMocks` above.
+ */
+describe('conversation feedback and contact routes (Checkpoint 5)', () => {
+  /** The config read the services perform; only the fields they consult are primed. */
+  const withFeedback = () => {
+    prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID });
+    prismaMock.botConfiguration.findUnique.mockResolvedValue({ feedbackEnabled: true });
+    prismaMock.message.findFirst.mockResolvedValue({ id: MESSAGE_ID, role: 'ASSISTANT' });
+    prismaMock.messageFeedback.upsert.mockResolvedValue({ id: 'fb', rating: 'UP' });
+  };
+
+  const withContact = () => {
+    prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID });
+    prismaMock.botConfiguration.findUnique.mockResolvedValue({
+      contactCollection: { enabled: true, fields: ['email'], required: ['email'] },
+    });
+    prismaMock.conversationContact.upsert.mockResolvedValue({ id: 'c', email: 'a@b.com' });
+  };
+
+  const cases: Case[] = [
+    { label: 'AGENT rates an assistant message (conversations:reply)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages/${MESSAGE_ID}/feedback`, as: 'AGENT', expect: 200, body: { rating: 'UP' }, prime: withFeedback },
+    { label: 'OWNER rates an assistant message', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages/${MESSAGE_ID}/feedback`, as: 'OWNER', expect: 200, body: { rating: 'UP' }, prime: withFeedback },
+    { label: 'a non-member rating a message gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages/${MESSAGE_ID}/feedback`, as: 'NON_MEMBER', expect: 404, body: { rating: 'UP' } },
+
+    { label: 'AGENT submits contact details (conversations:reply)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/contact`, as: 'AGENT', expect: 200, body: { email: 'a@b.com' }, prime: withContact },
+    { label: 'ADMIN submits contact details', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/contact`, as: 'ADMIN', expect: 200, body: { email: 'a@b.com' }, prime: withContact },
+    { label: 'a non-member submitting contact gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/contact`, as: 'NON_MEMBER', expect: 404, body: { email: 'a@b.com' } },
   ];
 
   it.each(cases)('$label', expectCase);
@@ -502,11 +847,15 @@ describe('unauthenticated requests are rejected before any authorization runs', 
     ['post', `/api/v1/bots/${BOT_ID}/conversations`],
     ['get', `/api/v1/conversations/${CONVERSATION_ID}`],
     ['post', `/api/v1/conversations/${CONVERSATION_ID}/messages`],
+    ['post', `/api/v1/conversations/${CONVERSATION_ID}/messages/${MESSAGE_ID}/feedback`],
+    ['delete', `/api/v1/conversations/${CONVERSATION_ID}/messages/${MESSAGE_ID}/feedback`],
+    ['post', `/api/v1/conversations/${CONVERSATION_ID}/contact`],
     ['get', '/api/v1/admin/ai/status'],
     ['get', '/api/v1/platform/users'],
     ['get', '/api/v1/platform/workspaces'],
     ['get', '/api/v1/platform/system'],
     ['patch', `/api/v1/bots/${BOT_ID}/model`],
+    ['post', `/api/v1/bots/${BOT_ID}/config/preview`],
     ['get', '/api/v1/ai/models'],
     ['get', '/api/v1/platform/providers'],
     ['patch', `/api/v1/platform/providers/${PROVIDER_ID}`],
@@ -570,7 +919,7 @@ describe('catalog identity fields are write-once', () => {
  * projection fails here rather than shipping the id to every tenant.
  */
 describe('providerModelId never reaches a workspace-facing projection', () => {
-  it('the catalog read selects id, displayName and the provider label — nothing else', async () => {
+  it('the catalog read selects id, displayName, the provider label and capabilities — nothing else', async () => {
     prismaMock.workspaceMember.findUnique.mockResolvedValue(memberRow('AGENT'));
     prismaMock.user.findUnique.mockResolvedValue({ platformRole: 'USER' });
     prismaMock.aIModel.findMany.mockResolvedValue([]);
@@ -585,6 +934,7 @@ describe('providerModelId never reaches a workspace-facing projection', () => {
         select: {
           id: true,
           displayName: true,
+          capabilities: true,
           provider: { select: { slug: true, name: true } },
         },
       })
@@ -598,7 +948,12 @@ describe('providerModelId never reaches a workspace-facing projection', () => {
     // for `providerModelId`, this fixture would have to change, and the assertion below
     // would fail on the key rather than pass on a coincidence.
     prismaMock.aIModel.findMany.mockResolvedValue([
-      { id: MODEL_ID, displayName: 'GPT-4o mini', provider: { slug: 'openrouter', name: 'OpenRouter' } },
+      {
+        id: MODEL_ID,
+        displayName: 'GPT-4o mini',
+        capabilities: null,
+        provider: { slug: 'openrouter', name: 'OpenRouter' },
+      },
     ]);
 
     const res = await request(app)
@@ -607,7 +962,12 @@ describe('providerModelId never reaches a workspace-facing projection', () => {
 
     expect(res.status).toBe(200);
     expect(res.body.data).toHaveLength(1);
-    expect(Object.keys(res.body.data[0]).sort()).toEqual(['displayName', 'id', 'provider']);
+    expect(Object.keys(res.body.data[0]).sort()).toEqual([
+      'capabilities',
+      'displayName',
+      'id',
+      'provider',
+    ]);
     expect(JSON.stringify(res.body)).not.toContain('openai/gpt-4o-mini');
   });
 
@@ -625,6 +985,9 @@ describe('providerModelId never reaches a workspace-facing projection', () => {
         enabled: true,
         provider: { slug: 'openrouter', name: 'OpenRouter', enabled: true },
       },
+      // The fallback slot is projected through the same `aiModelSelect`, so a bot with no
+      // fallback — the common case — carries `null` here rather than being omitted.
+      fallbackAiModel: null,
     });
 
     const res = await request(app)
@@ -643,11 +1006,20 @@ describe('providerModelId never reaches a workspace-facing projection', () => {
               provider: { select: { slug: true, name: true, enabled: true } },
             },
           },
+          fallbackAiModel: {
+            select: {
+              id: true,
+              displayName: true,
+              enabled: true,
+              provider: { select: { slug: true, name: true, enabled: true } },
+            },
+          },
         },
       })
     );
     const projected = res.body.data.aiModel;
     expect(Object.keys(projected).sort()).toEqual(['displayName', 'enabled', 'id', 'provider']);
+    expect(res.body.data.fallbackAiModel).toBeNull();
     expect(JSON.stringify(res.body)).not.toContain('openai/gpt-4o-mini');
   });
 });

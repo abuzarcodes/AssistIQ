@@ -35,3 +35,13 @@ export type AIFailureReason = (typeof AI_FAILURE_REASON)[keyof typeof AI_FAILURE
  */
 export const MODEL_UNAVAILABLE_MESSAGE =
   'This assistant is temporarily unavailable. A member of the team has been notified and will follow up.';
+
+/**
+ * The customer-facing text shown when the bot itself is paused (§5.1, §6 `isActive`).
+ *
+ * A paused bot is a deliberate owner action, not a fault, so it does **not** escalate: the
+ * conversation stays `ACTIVE` and the customer is simply told the assistant is offline. The
+ * wording deliberately avoids naming a model or a provider — pausing is a product state.
+ */
+export const BOT_PAUSED_MESSAGE =
+  'This assistant is currently paused. Please try again later.';

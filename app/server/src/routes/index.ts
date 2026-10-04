@@ -6,6 +6,8 @@ import userRoutes from './user.routes.js';
 import workspaceRoutes from './workspace.routes.js';
 import botRoutes from './bot.routes.js';
 import knowledgeRoutes from './knowledge.routes.js';
+import knowledgeSourceRoutes from './knowledgeSource.routes.js';
+import knowledgeChunkRoutes from './knowledgeChunk.routes.js';
 import conversationRoutes from './conversation.routes.js';
 import adminAiRoutes from './admin.ai.routes.js';
 import platformRoutes from './platform.routes.js';
@@ -23,6 +25,13 @@ router.use('/users', authenticate, userRoutes);
 router.use('/workspaces', authenticate, workspaceRoutes);
 router.use('/bots', authenticate, botRoutes);
 router.use('/knowledge', authenticate, knowledgeRoutes);
+// Document sources live at the top level for the same reason FAQ entries do: the id is
+// in the path and the workspace is resolved from it, so the URL stays flat while the
+// authorization chain (source → bot → workspace → membership) runs in the middleware.
+router.use('/knowledge-sources', authenticate, knowledgeSourceRoutes);
+// The same shape as sources, and for the same reason: a chunk id in the path is enough to
+// resolve the workspace it belongs to, so the item routes stay flat.
+router.use('/knowledge-chunks', authenticate, knowledgeChunkRoutes);
 router.use('/conversations', authenticate, conversationRoutes);
 
 // The AI catalog as workspaces see it: the list of *enabled* models, so a client can offer

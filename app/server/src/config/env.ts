@@ -23,6 +23,15 @@ const envSchema = z.object({
   AI_SERVICE_URL: z.string().url().optional().or(z.literal('')),
   // Per-request timeout in milliseconds for calls to the AI service.
   AI_SERVICE_TIMEOUT: z.coerce.number().int().positive().default(30000),
+  /**
+   * Timeout for a single document-ingestion call inside a batch upload.
+   *
+   * Longer than `AI_SERVICE_TIMEOUT` because one file's extraction + chunking + embedding
+   * is slow, and a batch of N files runs ceil(N / concurrency) of these in sequence, so
+   * the request has to outlive the lot. The `.max()` is a hard cap: a mis-set environment
+   * value must not be able to produce a request that waits indefinitely.
+   */
+  AI_SERVICE_UPLOAD_BATCH_TIMEOUT: z.coerce.number().int().positive().max(600000).default(300000),
   // Shared secret the Python service requires in the `X-API-Key` header (Checkpoint 5).
   AI_SERVICE_API_KEY: z.string().optional(),
 

@@ -20,6 +20,9 @@ const prismaMock = vi.hoisted(() => ({
   bot: { findUnique: vi.fn() },
   conversation: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
   message: { create: vi.fn() },
+  // Checkpoint 5: the message path resolves the bot configuration as well as its model.
+  botConfiguration: { findUnique: vi.fn() },
+  knowledgeSource: { findMany: vi.fn() },
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn() }));
@@ -70,7 +73,12 @@ const arrange = (resolution: unknown, user = USER) => {
     updatedAt: new Date(),
   });
   prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID });
-  prismaMock.bot.findUnique.mockResolvedValue(resolution);
+  // `isActive` answers the configuration read (Checkpoint 5) and the rest the model resolver;
+  // a `null` resolution is left as `null` so the "unreadable bot row" case stays reachable.
+  prismaMock.bot.findUnique.mockResolvedValue(
+    resolution === null ? null : { isActive: true, ...(resolution as Record<string, unknown>) }
+  );
+  prismaMock.botConfiguration.findUnique.mockResolvedValue(null);
   prismaMock.message.create.mockImplementation((args: { data: Record<string, unknown> }) =>
     Promise.resolve({
       id: args.data.role === 'USER' ? 'msg-user' : 'msg-assistant',
@@ -139,31 +147,36 @@ describe('a bot with an assigned, enabled model', () => {
     });
   });
 
-  it('resolves the model with a single query', async () => {
+  it('reads the bot row once for the model and once for the configuration', async () => {
     arrange({ aiModelId: 'model-1', aiModel: modelRow() });
 
     await send();
 
-    // D12: one round trip inside the message path, not two.
-    expect(prismaMock.bot.findUnique).toHaveBeenCalledTimes(1);
+    // Checkpoint 5 added the configuration read, so the message path makes exactly two
+    // `bot.findUnique` calls — one for the config projection (`isActive`, model ids) and one
+    // for the resolver's nested model select. Still no cache and no third read.
+    expect(prismaMock.bot.findUnique).toHaveBeenCalledTimes(2);
   });
 });
 
 describe('a bot with no model assigned', () => {
-  it('sends exactly the payload it sent before the resolver existed', async () => {
+  it('sends no model descriptor when the bot has no assignment', async () => {
     arrange({ aiModelId: null, aiModel: null });
 
     const res = await send();
 
     expect(res.status).toBe(201);
     expect(aiMock.chat).toHaveBeenCalledTimes(1);
-    expect(aiMock.chat).toHaveBeenCalledWith({
-      bot_id: BOT_ID,
-      message: 'Hello?',
-    });
-    // The key must be *absent*, not `undefined` and not `null` — a `null` here would be a
-    // different request on the wire, and Python would have to grow a branch for it.
-    expect(Object.keys(lastChatPayload())).toEqual(['bot_id', 'message']);
+    expect(aiMock.chat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        bot_id: BOT_ID,
+        message: 'Hello?',
+      })
+    );
+    // Checkpoint 5 always sends the resolved configuration. The claim this test has always
+    // made is that there is no `model` key: absent, not `undefined` and not `null`, because
+    // a `null` would be a different request on the wire.
+    expect(Object.keys(lastChatPayload()).sort()).toEqual(['bot_id', 'config', 'message']);
     expect('model' in lastChatPayload()).toBe(false);
   });
 
@@ -190,7 +203,6 @@ describe('an unusable assigned model short-circuits before the AI call', () => {
       resolution: { aiModelId: 'm', aiModel: modelRow({ provider: { slug: 'openrouter', enabled: false } }) },
     },
     { name: 'the model row is missing', resolution: { aiModelId: 'm', aiModel: null } },
-    { name: 'the bot row cannot be read', resolution: null },
   ];
 
   it.each(conditions)('$name — no provider spend', async ({ resolution }) => {
@@ -213,7 +225,8 @@ describe('an unusable assigned model short-circuits before the AI call', () => {
     expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
     expect(prismaMock.conversation.update).toHaveBeenCalledWith({
       where: { id: CONVERSATION_ID },
-      data: { status: 'WAITING_FOR_HUMAN' },
+      // Checkpoint 5 adds the escalation metadata alongside the status.
+      data: expect.objectContaining({ status: 'WAITING_FOR_HUMAN' }),
     });
 
     // Both messages are persisted: the customer gets a reply, not an error, and the
@@ -237,15 +250,19 @@ describe('an unusable assigned model short-circuits before the AI call', () => {
     expect(body).not.toContain('row is missing');
   });
 
-  it('a missing bot row is a failure, not a silent fall back to the platform default', async () => {
+  it('a missing bot row is a 404, not a silent fall back to the platform default', async () => {
     arrange(null);
 
     const res = await send();
 
-    // Serving the platform default here would attribute an answer to a model the workspace
-    // did not choose — the substitution the failure policy exists to prevent.
+    // Checkpoint 5 resolves the configuration before the model, and a configuration cannot
+    // be resolved for a bot row that does not exist — so this anomaly is refused rather than
+    // served. Serving the platform default would attribute an answer to a model the
+    // workspace did not choose; either way the substitution the failure policy prevents is
+    // impossible.
     expect(aiMock.chat).not.toHaveBeenCalled();
-    expect(res.body.data.ai.reason).toBe(AI_FAILURE_REASON.MODEL_UNAVAILABLE);
+    expect(res.status).toBe(404);
+    expect(prismaMock.message.create).not.toHaveBeenCalled();
   });
 
   it('distinguishes "no model assigned" from "assigned model unusable"', async () => {
@@ -302,7 +319,7 @@ describe('a reason from the AI service', () => {
     expect(res.body.data.ai.reason).toBe(AI_FAILURE_REASON.MODEL_ERROR);
     expect(prismaMock.conversation.update).toHaveBeenCalledWith({
       where: { id: CONVERSATION_ID },
-      data: { status: 'WAITING_FOR_HUMAN' },
+      data: expect.objectContaining({ status: 'WAITING_FOR_HUMAN' }),
     });
   });
 });
@@ -327,12 +344,25 @@ describe('catalog state is read per request', () => {
     prismaMock.conversation.update.mockResolvedValue({ id: CONVERSATION_ID });
 
     // Message 1: enabled. Message 2: the same bot, the same model, now disabled — the only
-    // difference is what the database returns.
-    prismaMock.bot.findUnique
-      .mockResolvedValueOnce({ aiModelId: 'm', aiModel: modelRow() })
-      .mockResolvedValueOnce({ aiModelId: 'm', aiModel: modelRow({ enabled: false }) });
+    // difference is what the database returns. The implementation distinguishes the two
+    // reads the message path makes per turn (configuration, then model).
+    let modelEnabled = true;
+    prismaMock.bot.findUnique.mockImplementation(
+      async ({ select }: { select?: Record<string, unknown> }) => {
+        if (select && 'isActive' in select) {
+          return { isActive: true, aiModelId: 'm', fallbackAiModelId: null };
+        }
+        return {
+          aiModelId: 'm',
+          fallbackAiModelId: null,
+          aiModel: modelRow({ enabled: modelEnabled }),
+          fallbackAiModel: null,
+        };
+      }
+    );
 
     const first = await send();
+    modelEnabled = false;
     const second = await send();
 
     expect(first.body.data.ai.fallback_required).toBe(false);
@@ -340,8 +370,9 @@ describe('catalog state is read per request', () => {
     expect(second.body.data.ai.reason).toBe(AI_FAILURE_REASON.MODEL_UNAVAILABLE);
     expect(aiMock.chat).toHaveBeenCalledTimes(1);
 
-    // Two reads for two messages: there is no cache, so there is nothing to invalidate.
-    expect(prismaMock.bot.findUnique).toHaveBeenCalledTimes(2);
+    // Two reads per message (configuration + model), four for two messages: there is no
+    // cache, so there is nothing to invalidate.
+    expect(prismaMock.bot.findUnique).toHaveBeenCalledTimes(4);
   });
 
   it('a re-enable is equally immediate', async () => {
@@ -358,11 +389,23 @@ describe('catalog state is read per request', () => {
     prismaMock.message.create.mockResolvedValue({ id: 'msg', createdAt: new Date() });
     prismaMock.conversation.update.mockResolvedValue({ id: CONVERSATION_ID });
 
-    prismaMock.bot.findUnique
-      .mockResolvedValueOnce({ aiModelId: 'm', aiModel: modelRow({ enabled: false }) })
-      .mockResolvedValueOnce({ aiModelId: 'm', aiModel: modelRow() });
+    let modelEnabled = false;
+    prismaMock.bot.findUnique.mockImplementation(
+      async ({ select }: { select?: Record<string, unknown> }) => {
+        if (select && 'isActive' in select) {
+          return { isActive: true, aiModelId: 'm', fallbackAiModelId: null };
+        }
+        return {
+          aiModelId: 'm',
+          fallbackAiModelId: null,
+          aiModel: modelRow({ enabled: modelEnabled }),
+          fallbackAiModel: null,
+        };
+      }
+    );
 
     const blocked = await send();
+    modelEnabled = true;
     const recovered = await send();
 
     expect(blocked.body.data.ai.reason).toBe(AI_FAILURE_REASON.MODEL_UNAVAILABLE);

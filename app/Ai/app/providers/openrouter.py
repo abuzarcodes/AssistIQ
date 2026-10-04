@@ -28,7 +28,14 @@ would create a second source of truth that can disagree with the first.
 from typing import Optional
 
 from app.core.config import settings
-from app.providers.openai_wire import build_messages, classify_error, run_completion
+from app.providers.base import GenerationParams, resolve_temperature
+from app.providers.openai_wire import (
+    OPENAI_WIRE_PARAMS,
+    build_client_kwargs,
+    build_messages,
+    classify_error,
+    run_completion,
+)
 from app.providers.registry import register
 
 #: `classify_error` is re-exported rather than merely imported: `tests/test_openrouter.py`
@@ -42,6 +49,8 @@ class OpenRouterProvider:
     """`LLMProvider` implementation for OpenRouter."""
 
     slug = "openrouter"
+
+    supported_params = OPENAI_WIRE_PARAMS
 
     @property
     def is_configured(self) -> bool:
@@ -72,6 +81,7 @@ class OpenRouterProvider:
         model_id: str,
         system_message: Optional[str] = None,
         temperature: float = 0.0,
+        params: Optional[GenerationParams] = None,
     ) -> str:
         """Run a completion against OpenRouter, or raise `ProviderError`.
 
@@ -82,17 +92,20 @@ class OpenRouterProvider:
         async def build_call():
             from langchain_openai import ChatOpenAI
 
+            kwargs = build_client_kwargs(self.supported_params, params)
+            kwargs["temperature"] = resolve_temperature(params, temperature)
+
             chat = ChatOpenAI(
                 base_url=settings.OPENROUTER_BASE_URL,
                 model=model_id,
                 api_key=settings.OPENROUTER_API_KEY,
-                temperature=temperature,
                 # Retries are off deliberately: Node's failure policy decides whether a
                 # request is retried, and a hidden retry loop here would multiply spend
                 # and stretch the request past the caller's own timeout.
                 max_retries=0,
                 request_timeout=settings.OPENROUTER_REQUEST_TIMEOUT,
                 default_headers=self._headers() or None,
+                **kwargs,
             )
             response = await chat.ainvoke(build_messages(prompt, system_message))
             return response.content

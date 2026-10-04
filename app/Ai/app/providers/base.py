@@ -182,11 +182,60 @@ class ProviderModelRef:
     model_id: str
 
 
+@dataclass(frozen=True)
+class GenerationParams:
+    """Sampling parameters for one completion, in the provider layer's own vocabulary.
+
+    A second `GenerationParams` exists in `app.schemas.chat` (a Pydantic model) and that
+    duplication is deliberate: the schema one validates a request body at the transport
+    boundary, this one is the frozen value the adapters consume. They are not the same type
+    because they do not have the same job — the schema model carries validation constraints
+    and JSON field names, this one carries no behaviour at all and must stay safe to hand
+    across layers mid-request.
+
+    `None` means **do not send the parameter**, not "send the default". A provider that
+    receives `temperature=0.0` and one that receives no temperature at all are making
+    different requests, and only the caller knows which was intended. Consequently nothing
+    here has a default value, and this module holds no table of what a "normal" value is.
+    """
+
+    temperature: Optional[float] = None
+    top_p: Optional[float] = None
+    frequency_penalty: Optional[float] = None
+    presence_penalty: Optional[float] = None
+    max_tokens: Optional[int] = None
+
+
+def resolve_temperature(params: Optional[GenerationParams], fallback: float) -> float:
+    """The temperature one call should send, decided in exactly one place.
+
+    `temperature` is the only sampling parameter this protocol had before
+    `GenerationParams` existed, so it has two possible sources and a precedence that has to
+    be stated rather than left to whichever line runs last:
+
+    * the structured parameter, which is where a bot's configuration arrives — plan §6
+      classifies `temperature` as a *structured provider parameter*, so when an owner has
+      set one, that value is the answer;
+    * the legacy argument, which is the fallback and, on the no-configuration path
+      (`params is None`), the only source — which is what keeps that path's request
+      identical to the one this service made before the feature existed.
+
+    `0.0` is a value, not an absence. Only `None` means "nothing was configured", so an
+    explicit `temperature=0.0` survives this function rather than being replaced by the
+    fallback. That distinction is the reason this is a function with a docstring instead of
+    a `setdefault` somewhere: `setdefault` would get `0.0` right by accident and a future
+    refactor to `or` would silently break it.
+    """
+    if params is not None and params.temperature is not None:
+        return params.temperature
+    return fallback
+
+
 class LLMProvider(Protocol):
     """What the registry requires of an adapter.
 
     A `Protocol` rather than a base class: adapters differ in how they talk to their
-    vendor, and the only thing the rest of the service needs is this trio. There is no
+    vendor, and the only thing the rest of the service needs is this quartet. There is no
     `@runtime_checkable` here — the registry dispatches by slug, never by `isinstance`,
     and a runtime-checkable protocol with a property member is a footgun.
     """
@@ -194,6 +243,18 @@ class LLMProvider(Protocol):
     #: The stable identifier Node uses in the descriptor. Must match the `slug` column
     #: of the `ai_providers` row, and must never change once shipped.
     slug: str
+
+    #: The generation parameters this adapter's SDK and wire protocol actually accept.
+    #:
+    #: This is a statement about *this service's own code*, not a copy of the catalog: it
+    #: says "this adapter knows how to send top_p", never "this model supports top_p". Node
+    #: owns the latter (per-model capability metadata) and filters first; this set is the
+    #: second, independent gate, and it is the one that cannot be wrong about what the
+    #: vendor SDK accepts.
+    #:
+    #: A parameter absent from this set is **dropped, not sent** — see
+    #: `openai_wire.build_client_kwargs`, which is the one place the intersection happens.
+    supported_params: frozenset
 
     @property
     def is_configured(self) -> bool:
@@ -212,11 +273,20 @@ class LLMProvider(Protocol):
         model_id: str,
         system_message: Optional[str] = None,
         temperature: float = 0.0,
+        params: Optional[GenerationParams] = None,
     ) -> str:
         """Produce a completion, or raise `ProviderError`.
 
         Implementations must raise `ProviderError` rather than returning an error
         string: Node's failure policy branches on the kind, and a string that merely
         looks like a failure would be indistinguishable from a real answer.
+
+        `params` is **optional with a `None` default** so that every call site written
+        before it existed keeps type-checking and behaving identically, and so an adapter
+        that declares no `supported_params` can be added without this argument mattering to
+        it. `temperature` stays a separate argument for the same reason — it is the one
+        parameter this protocol always had, and every existing caller passes it — but it is
+        no longer the *only* source: see `resolve_temperature`, which gives the structured
+        parameter precedence and falls back to this argument on the no-configuration path.
         """
         ...

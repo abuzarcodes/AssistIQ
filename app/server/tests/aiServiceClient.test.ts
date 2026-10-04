@@ -64,3 +64,95 @@ describe('AIServiceClient sends the service-to-service API key', () => {
     expect(fetchMock.mock.calls[0][0]).toBe('http://ai.test/api/v1/ai/status');
   });
 });
+
+/**
+ * Checkpoint 8 — what survives an AI service rejection.
+ *
+ * The status code is always 502: the AI service is a dependency and it failed to serve the
+ * request. What these pin is the *reason*, because that is the part call sites depend on.
+ * `ingestFile` records it as the source's `errorMessage`, and `deleteChunk` reads the
+ * upstream status to decide whether a missing vector is a failure or an already-done job.
+ * Losing either would restore the two bugs this block exists to catch: a malformed PDF
+ * reported as an outage, and a chunk row that can never be deleted.
+ */
+
+describe('AIServiceClient distinguishes whose request failed', () => {
+  const errorResponse = (status: number, body: unknown) => ({
+    ok: false,
+    status,
+    json: async () => body,
+  });
+
+  /** Capture the rejection so the error's own fields can be inspected. */
+  const caught = async (call: () => Promise<unknown>) => {
+    try {
+      await call();
+    } catch (err) {
+      return err as Error & { upstreamStatus?: number; upstreamDetail?: string; statusCode?: number };
+    }
+    throw new Error('expected the call to reject');
+  };
+
+  it('carries a 4xx detail through as the message, with the upstream status attached', async () => {
+    // The malformed-PDF case (section 18.2). The AI service's own words are the only thing
+    // that tells the user which file to fix.
+    fetchMock.mockResolvedValue(
+      errorResponse(400, { detail: 'Failed to process PDF file: cannot read stream' })
+    );
+
+    const err = await caught(() => aiServiceClient.getAiStatus());
+
+    expect(err.message).toBe('Failed to process PDF file: cannot read stream');
+    expect(err.statusCode).toBe(502);
+    expect(err.upstreamStatus).toBe(400);
+    expect(err.upstreamDetail).toBe('Failed to process PDF file: cannot read stream');
+  });
+
+  it('keeps the generic message for a 5xx, so internals never reach the customer', async () => {
+    fetchMock.mockResolvedValue(
+      errorResponse(500, { detail: 'psycopg.OperationalError: connection refused at 10.0.0.4' })
+    );
+
+    const err = await caught(() => aiServiceClient.getAiStatus());
+
+    expect(err.message).toBe('The AI service is currently unavailable. Please try again later.');
+    expect(err.statusCode).toBe(502);
+    // Kept on the error for the logs and for call sites that branch on it — merely not shown.
+    expect(err.upstreamStatus).toBe(500);
+  });
+
+  it('carries the upstream status on a 404 so a caller can treat it as already-absent', async () => {
+    fetchMock.mockResolvedValue(errorResponse(404, { detail: 'Chunk not found.' }));
+
+    const err = await caught(() => aiServiceClient.getAiStatus());
+
+    expect(err.upstreamStatus).toBe(404);
+  });
+
+  it('survives an error body that is not JSON at all', async () => {
+    // A proxy or a crashed worker can answer with HTML or nothing. The status is still
+    // meaningful and must not be lost to a parse failure.
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 502,
+      json: async () => {
+        throw new SyntaxError('Unexpected token <');
+      },
+    });
+
+    const err = await caught(() => aiServiceClient.getAiStatus());
+
+    expect(err.message).toBe('The AI service is currently unavailable. Please try again later.');
+    expect(err.upstreamStatus).toBe(502);
+  });
+
+  it('reports a connection failure with no upstream status, since nothing answered', async () => {
+    fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+
+    const err = await caught(() => aiServiceClient.getAiStatus());
+
+    expect(err.message).toBe('The AI service is currently unavailable. Please try again later.');
+    expect(err.statusCode).toBe(502);
+    expect(err.upstreamStatus).toBeUndefined();
+  });
+});

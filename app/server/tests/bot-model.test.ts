@@ -250,10 +250,21 @@ describe('GET /api/v1/ai/models', () => {
       .set('Authorization', authHeader(AGENT));
 
     expect(res.status).toBe(200);
+    // `capabilities` rides along with each selectable model (§12.3) so the configuration UI
+    // can grey out the controls a model cannot honour without a second round trip. Asserted
+    // exactly rather than with `toMatchObject`, so a new field added to this projection has
+    // to be a deliberate edit to this test — which is the point of the projection.
     expect(res.body.data[0]).toEqual({
       id: MODEL_ID,
       displayName: 'GPT-4o mini',
       provider: { slug: 'openrouter', name: 'OpenRouter' },
+      capabilities: {
+        temperature: true,
+        topP: true,
+        maxTokens: true,
+        frequencyPenalty: true,
+        presencePenalty: true,
+      },
     });
     // The projection is what makes the bypass impossible rather than merely discouraged.
     expect(JSON.stringify(res.body.data)).not.toContain('providerModelId');

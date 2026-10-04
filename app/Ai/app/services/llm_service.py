@@ -4,7 +4,7 @@ from typing import Optional
 from app.core.config import settings
 from app.core.logging import logger, format_log_context
 from app.core.redaction import redact
-from app.providers import ProviderModelRef, get_provider
+from app.providers import GenerationParams, ProviderModelRef, get_provider
 from app.providers.base import fault_for
 from app.providers.openai_wire import classify_error
 
@@ -38,6 +38,7 @@ class LLMService:
         system_message: Optional[str] = None,
         temperature: float = 0.0,
         model: Optional[ProviderModelRef] = None,
+        params: Optional[GenerationParams] = None,
     ) -> str:
         """Generate a response from the configured LLM provider or a fallback mock response.
 
@@ -57,14 +58,28 @@ class LLMService:
         fell into the existing ``except Exception`` it would come back as the
         ``[Fallback Response] ... Query was: '...'`` string, indistinguishable from a real
         answer and carrying the user's prompt into the transcript. Errors here propagate.
+
+        ``params`` is forwarded **only when one was supplied**, and that conditionality is
+        deliberate rather than a micro-optimisation: the adapter protocol gained this
+        argument after it shipped, so an adapter written against the original signature must
+        keep working untouched. `None` already means "no generation parameters", so not
+        passing it says the same thing.
         """
         if model is not None:
             provider = get_provider(model.provider)
+            if params is None:
+                return await provider.generate(
+                    prompt=prompt,
+                    model_id=model.model_id,
+                    system_message=system_message,
+                    temperature=temperature,
+                )
             return await provider.generate(
                 prompt=prompt,
                 model_id=model.model_id,
                 system_message=system_message,
                 temperature=temperature,
+                params=params,
             )
 
         if not self.is_configured:

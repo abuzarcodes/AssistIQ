@@ -110,14 +110,41 @@ export const deleteKnowledge = async (knowledgeId: string, _userId: string): Pro
   throw new AppError('Deleting specific knowledge entries is coming soon. Please delete all knowledge for the bot.', 501);
 };
 
-/** Delete all knowledge entries for a bot */
+/**
+ * Delete every FAQ entry for a bot, and the vectors they produced.
+ *
+ * **Scoped to the entries' own ids, not to the bot.** A bot's vectors come from two
+ * sources — hand-written FAQ entries and uploaded documents — and they share one pgvector
+ * table, distinguished only by `source_id` (an entry id here, a `knowledge_sources` row id
+ * there). The obvious call, `deleteBotKnowledge(botId)`, takes every vector the bot owns:
+ * the documents would survive in the UI, their `knowledge_chunks_meta` rows would survive
+ * in this database, and every one of them would have stopped being searchable with nothing
+ * recording why. Naming the entry ids removes exactly what the button says it removes.
+ *
+ * The entry ids are read *before* the rows are deleted, because afterwards there is
+ * nothing left to derive them from — and an orphaned vector is unreachable, since a
+ * `source_id` is the only handle that identifies it.
+ *
+ * The vector call is attempted even though the rows are already gone, and its failure is
+ * logged rather than thrown: the user asked for the FAQs to be gone, and they are. Failing
+ * the request would report an error for work that succeeded, and the retry would find no
+ * entries to name — so the orphans could never be cleaned up at all.
+ */
 export const deleteAllKnowledge = async (botId: string, userId: string): Promise<void> => {
   await getBotById(botId, userId);
+
+  const entries = await prisma.knowledgeEntry.findMany({
+    where: { botId },
+    select: { id: true },
+  });
+
   await prisma.knowledgeEntry.deleteMany({ where: { botId } });
-  
+
+  if (entries.length === 0) return;
+
   try {
-    await aiServiceClient.deleteBotKnowledge(botId);
+    await aiServiceClient.bulkDeleteSourceVectors(botId, entries.map((entry) => entry.id));
   } catch (err) {
-    logger.error({ err, botId }, 'Failed to delete knowledge from AI service');
+    logger.error({ err, botId, entryCount: entries.length }, 'Failed to delete knowledge from AI service');
   }
 };

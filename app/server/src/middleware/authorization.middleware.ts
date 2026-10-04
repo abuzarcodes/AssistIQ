@@ -24,15 +24,19 @@ import * as authorizationService from '../services/authorization.service.js';
 
 /**
  * Where to read the workspace id from.
- *   'params'       — `req.params.workspaceId` (default)
- *   'bot'          — resolve via Bot → workspaceId
- *   'knowledge'    — resolve via KnowledgeEntry → bot → workspaceId
- *   'conversation' — resolve via Conversation → bot → workspaceId
+ *   'params'          — `req.params.workspaceId` (default)
+ *   'bot'             — resolve via Bot → workspaceId
+ *   'knowledge'       — resolve via KnowledgeEntry → bot → workspaceId
+ *   'knowledgeSource' — resolve via KnowledgeSource → bot → workspaceId
+ *   'knowledgeChunk'  — resolve via KnowledgeChunk → bot → workspaceId
+ *   'conversation'    — resolve via Conversation → bot → workspaceId
  */
 export type WorkspaceScope =
   | { from: 'params'; param?: string }
   | { from: 'bot'; param?: string }
   | { from: 'knowledge'; param?: string }
+  | { from: 'knowledgeSource'; param?: string }
+  | { from: 'knowledgeChunk'; param?: string }
   | { from: 'conversation'; param?: string };
 
 /** Resolve the workspace id for the request, or throw 404 when the resource is absent. */
@@ -66,6 +70,28 @@ const resolveWorkspaceId = async (req: Request, scope: WorkspaceScope): Promise<
         throw new NotFoundError('Knowledge entry not found');
       }
       return entry.bot.workspaceId;
+    }
+
+    case 'knowledgeSource': {
+      const source = await prisma.knowledgeSource.findUnique({
+        where: { id: req.params[scope.param ?? 'sourceId'] ?? '' },
+        select: { bot: { select: { workspaceId: true } } },
+      });
+      if (!source) {
+        throw new NotFoundError('Knowledge source not found');
+      }
+      return source.bot.workspaceId;
+    }
+
+    case 'knowledgeChunk': {
+      const chunk = await prisma.knowledgeChunk.findUnique({
+        where: { id: req.params[scope.param ?? 'chunkId'] ?? '' },
+        select: { bot: { select: { workspaceId: true } } },
+      });
+      if (!chunk) {
+        throw new NotFoundError('Knowledge chunk not found');
+      }
+      return chunk.bot.workspaceId;
     }
 
     case 'conversation': {

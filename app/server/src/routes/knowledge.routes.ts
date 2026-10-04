@@ -1,7 +1,7 @@
 import { Router } from 'express';
-import multer from 'multer';
 import { validate } from '../middleware/validation.middleware.js';
 import { requireWorkspacePermission } from '../middleware/authorization.middleware.js';
+import { documentUpload, uploadLimits } from '../middleware/uploadLimits.middleware.js';
 import { PERMISSIONS } from '../constants/permissions.js';
 import { botIdParamSchema } from '../schemas/bot.schema.js';
 import {
@@ -10,25 +10,6 @@ import {
   knowledgeIdParamSchema,
 } from '../schemas/knowledge.schema.js';
 import * as knowledgeController from '../controllers/knowledge.controller.js';
-import { AppError } from '../utils/errors.js';
-
-// Multer config: memory storage, 10 MB limit, PDF/DOCX only
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
-  fileFilter: (_req, file, cb) => {
-    const allowed = [
-      'application/pdf',
-      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    ];
-    if (allowed.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      // A wrong content type is a client error, so surface it as 400 (not a 500).
-      cb(new AppError('Only PDF and DOCX files are allowed.', 400));
-    }
-  },
-});
 
 const botScope = { from: 'bot' } as const;
 const knowledgeScope = { from: 'knowledge' } as const;
@@ -58,11 +39,30 @@ knowledgeCreateListRouter.delete(
   requireWorkspacePermission(PERMISSIONS.KNOWLEDGE_MANAGE, botScope),
   knowledgeController.deleteAllKnowledge
 );
+/**
+ * Legacy single-file document upload.
+ *
+ * Kept at this URL with its original contract — one file in the `file` field, a 201 on
+ * success — so existing clients keep working. What changed in Checkpoint 4 is the order of
+ * the middle two steps and where the size limit comes from:
+ *
+ *  - The permission guard now runs **before** multer. It previously ran after, so an
+ *    unauthorized request had its whole body buffered into memory before being refused
+ *    (section 3.4, gap 10).
+ *  - The size limit is the platform's resolved `maxUploadFileSizeBytes`, not the 10 MB
+ *    literal this route used to carry. The route now enforces the same limit as the batch
+ *    route and the 413 message quotes the value that was actually applied (section 12.11).
+ *
+ * Behaviour is otherwise unchanged: a file larger than the configured limit is still a
+ * 413, because a single-file request has no siblings whose work a failure would discard —
+ * unlike the batch route, where an oversized file is a per-file `REJECTED`.
+ */
 knowledgeCreateListRouter.post(
   '/upload-document',
-  upload.single('file'),
-  // Document upload is guarded before multer buffers the body into memory.
+  validate({ params: botIdParamSchema }),
   requireWorkspacePermission(PERMISSIONS.DOCUMENTS_MANAGE, botScope),
+  uploadLimits(),
+  documentUpload('file', 'single'),
   knowledgeController.uploadDocument
 );
 

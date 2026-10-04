@@ -36,7 +36,17 @@ const prismaMock = vi.hoisted(() => ({
     findUnique: vi.fn(),
     update: vi.fn(),
   },
-  message: { create: vi.fn() },
+  message: { create: vi.fn(), findFirst: vi.fn() },
+  // Checkpoint 5: `addMessage` now resolves the bot configuration (and, when sources are
+  // on, their labels) before and after the AI call.
+  botConfiguration: { findUnique: vi.fn() },
+  knowledgeSource: { findMany: vi.fn() },
+  messageFeedback: {
+    upsert: vi.fn(),
+    findUnique: vi.fn(),
+    delete: vi.fn(),
+  },
+  conversationContact: { upsert: vi.fn() },
 }));
 
 // The AI boundary is mocked so no Python service is required (spec §15, §24).
@@ -72,7 +82,13 @@ const botBelongsToWorkspace = () => prismaMock.bot.findUnique.mockResolvedValue(
  * default, sending the same payload it sent before the resolver existed.
  */
 const botHasNoModel = () =>
-  prismaMock.bot.findUnique.mockResolvedValue({ aiModelId: null, aiModel: null });
+  prismaMock.bot.findUnique.mockResolvedValue({
+    isActive: true,
+    aiModelId: null,
+    fallbackAiModelId: null,
+    aiModel: null,
+    fallbackAiModel: null,
+  });
 
 const conversationBelongsToWorkspace = () =>
   prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
@@ -290,8 +306,13 @@ describe('Checkpoint 7 — agent conversation foundation', () => {
     const { data } = prismaMock.conversation.update.mock.calls[0][0] as {
       data: Record<string, unknown>;
     };
-    // Exactly the status change — assignment stays for the future human-support workflow.
-    expect(data).toEqual({ status: 'WAITING_FOR_HUMAN' });
+    // The status transition plus the escalation metadata added in Checkpoint 5 — assignment
+    // stays for the future human-support workflow.
+    expect(data).toMatchObject({
+      status: 'WAITING_FOR_HUMAN',
+      escalatedOffHours: false,
+    });
+    expect(data.escalatedAt).toBeInstanceOf(Date);
     expect(data).not.toHaveProperty('assignedAgentId');
   });
 
@@ -303,8 +324,11 @@ describe('Checkpoint 7 — agent conversation foundation', () => {
     const conversationModel = /model Conversation \{([\s\S]*?)\n\}/.exec(schema)?.[1];
 
     expect(conversationModel).toBeDefined();
-    expect(conversationModel).toContain('assignedAgentId String?');
+    // Matched on the field and its type, not on the whitespace between them: Prisma's
+    // formatter realigns every column whenever a field is added to the model, and a test
+    // that breaks on that is testing the formatter rather than the schema.
+    expect(conversationModel).toMatch(/\bassignedAgentId\s+String\?/);
     // The status enum the escalation branch relies on.
-    expect(conversationModel).toContain('status          ConversationStatus @default(ACTIVE)');
+    expect(conversationModel).toMatch(/\bstatus\s+ConversationStatus\s+@default\(ACTIVE\)/);
   });
 });

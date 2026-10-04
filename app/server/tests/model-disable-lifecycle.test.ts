@@ -29,6 +29,9 @@ const prismaMock = vi.hoisted(() => ({
   aIModel: { findUnique: vi.fn(), update: vi.fn() },
   conversation: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   message: { create: vi.fn() },
+  // Checkpoint 5: the message path resolves the bot configuration as well as its model.
+  botConfiguration: { findUnique: vi.fn() },
+  knowledgeSource: { findMany: vi.fn() },
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn(), getAiStatus: vi.fn() }));
@@ -162,10 +165,16 @@ beforeEach(() => {
       const bot = findBot(where.id);
       if (!bot) return null;
 
+      // The configuration read (Checkpoint 5) asks for `isActive`; the resolver asks for
+      // `aiModelId`. Both are distinguished from the middleware's scope read.
+      if (select && 'isActive' in select) {
+        return { isActive: true, aiModelId: bot.aiModelId, fallbackAiModelId: null };
+      }
       if (select && 'aiModelId' in select) {
         const model = bot.aiModelId ? findModel(bot.aiModelId) : null;
         return {
           aiModelId: bot.aiModelId,
+          fallbackAiModelId: null,
           aiModel: model
             ? {
                 providerModelId: model.providerModelId,
@@ -173,6 +182,7 @@ beforeEach(() => {
                 provider: { slug: catalog.provider.slug, enabled: catalog.provider.enabled },
               }
             : null,
+          fallbackAiModel: null,
         };
       }
 
@@ -208,6 +218,8 @@ beforeEach(() => {
     content: args.data.content,
     createdAt: new Date(),
   }));
+  // Checkpoint 5: no configuration row → defaults (fallback enabled, no business hours).
+  prismaMock.botConfiguration.findUnique.mockResolvedValue(null);
 
   // --- The AI boundary ---
   aiMock.chat.mockResolvedValue({
@@ -281,11 +293,12 @@ describe('disable-after-assignment: the full lifecycle', () => {
     expect(blocked.body.data.ai.fallback_required).toBe(true);
     expect(blocked.body.data.ai.reason).toBe(AI_FAILURE_REASON.MODEL_UNAVAILABLE);
 
-    // The existing escalation shape, unchanged: exactly one update, status only.
+    // The escalation shape: exactly one update, carrying the status and the Checkpoint 5
+    // escalation metadata (reason, time, off-hours flag).
     expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
     expect(prismaMock.conversation.update).toHaveBeenCalledWith({
       where: { id: CONV_A },
-      data: { status: 'WAITING_FOR_HUMAN' },
+      data: expect.objectContaining({ status: 'WAITING_FOR_HUMAN' }),
     });
 
     // The customer sees a reply, not an error, and their question is in the transcript.
@@ -362,7 +375,10 @@ describe('disable-after-assignment: the full lifecycle', () => {
     expect(res.body.data.ai.fallback_required).toBe(false);
     expect(res.body.data.ai.reason).toBeUndefined();
     expect(aiMock.chat).toHaveBeenCalledTimes(1);
-    expect(Object.keys(lastChatPayload())).toEqual(['bot_id', 'message']);
+    // Checkpoint 5 adds the resolved configuration to every payload; `model` is still absent
+    // because this bot has no assignment.
+    expect(Object.keys(lastChatPayload()).sort()).toEqual(['bot_id', 'config', 'message']);
+    expect('model' in lastChatPayload()).toBe(false);
     expect(prismaMock.conversation.update).not.toHaveBeenCalled();
   });
 

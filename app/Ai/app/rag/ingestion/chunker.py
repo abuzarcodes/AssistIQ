@@ -14,21 +14,32 @@ class TextChunker:
 
     def split_text(self, text: str) -> List[str]:
         """Split single text block into chunks with configured size and overlap."""
+        return [chunk for _, _, chunk in self.split_text_with_offsets(text)]
+
+    def split_text_with_offsets(self, text: str) -> List[tuple]:
+        """Split text into chunks, also reporting each chunk's span in the source.
+
+        Returns:
+            A list of ``(start, end, chunk)`` tuples where ``text[start:end] == chunk``.
+
+        The offsets are what let a caller attribute a chunk to its originating page
+        without re-searching for the chunk text — a search would be ambiguous, since
+        overlapping chunks and repeated boilerplate make chunk text non-unique.
+        """
         if not text:
             return []
 
-        chunks: List[str] = []
+        chunks: List[tuple] = []
         start = 0
         text_len = len(text)
 
         while start < text_len:
             end = start + self.chunk_size
-            chunk = text[start:end]
-            chunks.append(chunk)
+            chunks.append((start, min(end, text_len), text[start:end]))
 
             if end >= text_len:
                 break
-            
+
             start += self.chunk_size - self.chunk_overlap
 
         return chunks

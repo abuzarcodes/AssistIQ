@@ -16,7 +16,13 @@ answer that tells them what to do.
 from typing import Optional
 
 from app.core.config import settings
-from app.providers.openai_wire import build_messages, run_completion
+from app.providers.base import GenerationParams, resolve_temperature
+from app.providers.openai_wire import (
+    OPENAI_WIRE_PARAMS,
+    build_client_kwargs,
+    build_messages,
+    run_completion,
+)
 from app.providers.registry import register
 
 
@@ -24,6 +30,8 @@ class OpenAIProvider:
     """`LLMProvider` implementation for OpenAI."""
 
     slug = "openai"
+
+    supported_params = OPENAI_WIRE_PARAMS
 
     @property
     def is_configured(self) -> bool:
@@ -40,20 +48,28 @@ class OpenAIProvider:
         model_id: str,
         system_message: Optional[str] = None,
         temperature: float = 0.0,
+        params: Optional[GenerationParams] = None,
     ) -> str:
         """Run a completion against OpenAI, or raise `ProviderError`."""
 
         async def build_call():
             from langchain_openai import ChatOpenAI
 
+            # Only the parameters this adapter can actually send survive the intersection;
+            # anything else is dropped and reported once at DEBUG. See `build_client_kwargs`.
+            kwargs = build_client_kwargs(self.supported_params, params)
+            # `temperature` has two possible sources and one owner; the precedence between
+            # them lives in `resolve_temperature` rather than in this line.
+            kwargs["temperature"] = resolve_temperature(params, temperature)
+
             chat = ChatOpenAI(
                 base_url=settings.OPENAI_BASE_URL,
                 model=model_id,
                 api_key=settings.OPENAI_API_KEY,
-                temperature=temperature,
                 # Node's failure policy owns retries — see `openai_wire.run_completion`.
                 max_retries=0,
                 request_timeout=settings.OPENAI_REQUEST_TIMEOUT,
+                **kwargs,
             )
             response = await chat.ainvoke(build_messages(prompt, system_message))
             return response.content

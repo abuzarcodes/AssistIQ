@@ -25,6 +25,9 @@ const prismaMock = vi.hoisted(() => ({
   aIModel: { findUnique: vi.fn(), update: vi.fn(), delete: vi.fn() },
   conversation: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   message: { create: vi.fn() },
+  // Checkpoint 5: the message path resolves the bot configuration as well as its model.
+  botConfiguration: { findUnique: vi.fn() },
+  knowledgeSource: { findMany: vi.fn() },
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn(), getAiStatus: vi.fn() }));
@@ -165,15 +168,22 @@ beforeEach(() => {
     };
   });
 
-  // The permission middleware's scope read and the resolver's read, distinguished by `select`.
+  // Three reads of the same row, distinguished by `select`: the permission middleware's
+  // scope read, the configuration read (Checkpoint 5), and the model resolver's read.
   prismaMock.bot.findUnique.mockImplementation(
     async ({ where, select }: { where: { id: string }; select?: Record<string, unknown> }) => {
       const bot = findBot(where.id);
       if (!bot) return null;
+      // The configuration projection asks for `isActive`; it must be distinguished from the
+      // resolver's read, which also asks for `aiModelId`.
+      if (select && 'isActive' in select) {
+        return { isActive: true, aiModelId: bot.aiModelId, fallbackAiModelId: null };
+      }
       if (select && 'aiModelId' in select) {
         const model = bot.aiModelId ? findModel(bot.aiModelId) : null;
         return {
           aiModelId: bot.aiModelId,
+          fallbackAiModelId: null,
           aiModel: model
             ? {
                 providerModelId: model.providerModelId,
@@ -181,11 +191,13 @@ beforeEach(() => {
                 provider: { slug: catalog.provider.slug, enabled: catalog.provider.enabled },
               }
             : null,
+          fallbackAiModel: null,
         };
       }
       return { workspaceId: WORKSPACE_ID };
     }
   );
+  prismaMock.botConfiguration.findUnique.mockResolvedValue(null);
   prismaMock.bot.findFirst.mockImplementation(async ({ where }: { where: { id: string } }) => {
     const bot = findBot(where.id);
     return bot ? { id: bot.id, name: 'Helper', description: null, workspaceId: WORKSPACE_ID, aiModelId: bot.aiModelId } : null;

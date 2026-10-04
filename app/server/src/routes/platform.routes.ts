@@ -10,6 +10,7 @@ import {
   updateModelSchema,
   updateProviderSchema,
 } from '../schemas/aiCatalog.schema.js';
+import { updateSettingsSchema } from '../schemas/platformSettings.schema.js';
 
 /**
  * Platform admin API, mounted at /platform and gated by `authenticate` +
@@ -29,6 +30,22 @@ const router = Router();
 router.get('/users', platformController.listUsers);
 router.get('/workspaces', platformController.listWorkspaces);
 router.get('/system', platformController.getSystemStatus);
+
+// --- Upload limits (section 12.9) ---
+//
+// No route-level guard, for the same reason as the catalog routes below: the namespace
+// guard in routes/index.ts is the single place the platform-owner check belongs, so a
+// route added here cannot accidentally ship unguarded.
+//
+// This is the write path for the limits every upload enforces. `updateSettingsSchema`
+// bounds each field and `settingsInvariantsSchema` (applied by the service, on the merged
+// result) rejects a self-contradictory combination.
+router.get('/settings', platformController.getSettings);
+router.patch(
+  '/settings',
+  validate({ body: updateSettingsSchema }),
+  platformController.updateSettings
+);
 
 // --- AI catalog (platform-owner only via the namespace guard) ---
 

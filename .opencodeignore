@@ -1,0 +1,16 @@
+# Block Node.js dependency graphs
+node_modules/
+.next/
+dist/
+build/
+
+# Block Python virtual environments & packages
+venv/
+.venv/
+__pycache__/
+*.pyc
+
+# Block database binaries and logs
+.prisma/
+*.db
+*.log

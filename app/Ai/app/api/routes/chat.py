@@ -29,9 +29,29 @@ async def chat_pipeline(
                 if request.model is not None
                 else None
             ),
+            fallback_model=(
+                ProviderModelRef(
+                    provider=request.fallback_model.provider,
+                    model_id=request.fallback_model.model_id,
+                )
+                if request.fallback_model is not None
+                else None
+            ),
+            # Passed as the schema model rather than a dict: the prompt builder reads typed
+            # attributes, and the validation that rejected a reserved sentinel in an owner's
+            # instructions has already run by this point.
+            config=request.config,
         )
         # Note: We omit 'debug' block in production response, or we could include it.
         # The prompt requires deterministic endpoints, so we map the service output exactly.
+        # `result` is a dict, and mapping it explicitly (rather than splatting it) is what
+        # keeps `debug` — which contains the full retrieval text and both prompts — out of
+        # the response, so a new key in the pipeline cannot leak here by accident.
+        #
+        # `model_used` and `failover_used` are mapped because Node reads them for logging
+        # and for `effective`; the plan makes it Node's job not to forward them onward, which
+        # is a rule it can only follow if it receives them. `human_requested` is a detection
+        # Node acts on via `humanRequestBehavior` — this service decides nothing about it.
 
         return ChatResponse(
             status=result["status"],
@@ -39,7 +59,11 @@ async def chat_pipeline(
             fallback_required=result["fallback_required"],
             reason=result["reason"],
             intent=result["intent"],
-            retrieval=result["retrieval"]
+            retrieval=result["retrieval"],
+            sources=result.get("sources"),
+            model_used=result.get("model_used"),
+            failover_used=result.get("failover_used", False),
+            human_requested=result.get("human_requested", False),
         )
     except Exception as e:
         logger.error(f"Chat pipeline failed: {e}")

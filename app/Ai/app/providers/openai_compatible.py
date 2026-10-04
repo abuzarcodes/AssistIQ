@@ -32,7 +32,13 @@ this codebase reports configuration problems rather than smoothing them over.
 from typing import Optional
 
 from app.core.config import settings
-from app.providers.openai_wire import build_messages, run_completion
+from app.providers.base import GenerationParams, resolve_temperature
+from app.providers.openai_wire import (
+    OPENAI_WIRE_PARAMS,
+    build_client_kwargs,
+    build_messages,
+    run_completion,
+)
 from app.providers.registry import register
 
 
@@ -40,6 +46,11 @@ class OpenAICompatibleProvider:
     """`LLMProvider` implementation for a configured OpenAI-compatible endpoint."""
 
     slug = "openai_compatible"
+
+    #: The same five the wire protocol carries. An endpoint that ignores one of them will
+    #: accept and discard it, which is the endpoint's business — this adapter's job is to
+    #: send what it was asked to send, to a server that speaks the protocol it claims to.
+    supported_params = OPENAI_WIRE_PARAMS
 
     @property
     def is_configured(self) -> bool:
@@ -58,19 +69,23 @@ class OpenAICompatibleProvider:
         model_id: str,
         system_message: Optional[str] = None,
         temperature: float = 0.0,
+        params: Optional[GenerationParams] = None,
     ) -> str:
         """Run a completion against the configured endpoint, or raise `ProviderError`."""
 
         async def build_call():
             from langchain_openai import ChatOpenAI
 
+            kwargs = build_client_kwargs(self.supported_params, params)
+            kwargs["temperature"] = resolve_temperature(params, temperature)
+
             chat = ChatOpenAI(
                 base_url=settings.OPENAI_COMPATIBLE_BASE_URL,
                 model=model_id,
                 api_key=settings.OPENAI_COMPATIBLE_API_KEY,
-                temperature=temperature,
                 max_retries=0,
                 request_timeout=settings.OPENAI_COMPATIBLE_REQUEST_TIMEOUT,
+                **kwargs,
             )
             response = await chat.ainvoke(build_messages(prompt, system_message))
             return response.content

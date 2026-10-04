@@ -84,27 +84,45 @@ model Workspace {
 }
 
 model Bot {
-  id          String   @id @default(uuid())
-  name        String
-  description String?
-  workspaceId String
+  id                String   @id @default(uuid())
+  name              String
+  description       String?
+  workspaceId       String
   /// The catalog model this bot runs on. NULL is a permanent, first-class product state
   /// meaning "follow the platform default model" — it is NOT a transitional migration
   /// artefact. It is never written implicitly: only an explicit authorized PATCH sets or
   /// clears it, which is why the relation below is `Restrict` rather than `SetNull`.
-  aiModelId   String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  aiModelId         String?
+  /// Operational state (BOT_IMPLEMENTATION_PLAN.md §9.3). A paused bot short-circuits
+  /// before any AI call, so it costs nothing while it is switched off. Defaults true, so
+  /// every pre-existing bot keeps behaving exactly as it did.
+  isActive          Boolean  @default(true)
+  /// Catalog model used when the primary fails (§13). Same `Restrict` semantics as
+  /// `aiModelId`: a model a bot still references cannot be deleted by any path.
+  fallbackAiModelId String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  workspace     Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace       Workspace        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   /// `Restrict` is a database-level backstop under the service-layer 409 in
   /// `deleteModel`: a model any bot still references cannot be deleted by any path.
-  aiModel       AIModel?         @relation(fields: [aiModelId], references: [id], onDelete: Restrict)
-  knowledge     KnowledgeEntry[]
-  conversations Conversation[]
+  aiModel         AIModel?         @relation("BotPrimaryModel", fields: [aiModelId], references: [id], onDelete: Restrict)
+  fallbackAiModel AIModel?         @relation("BotFallbackModel", fields: [fallbackAiModelId], references: [id], onDelete: Restrict)
+  knowledge       KnowledgeEntry[]
+  conversations   Conversation[]
+
+  /// Document-derived knowledge (see DOCUMENT_KNOWLEDGE_IMPLEMENTATION_PLAN.md).
+  /// `knowledge` above stays the manual FAQ path; these two are the document path.
+  knowledgeSources KnowledgeSource[]
+  knowledgeChunks  KnowledgeChunk[]
+
+  /// 1:1 bot configuration (§9). Absent row == every documented default, which is why no
+  /// backfill is needed and why "reset to recommended" is a delete-shaped operation.
+  configuration BotConfiguration?
 
   @@index([workspaceId])
   @@index([aiModelId])
+  @@index([fallbackAiModelId])
   @@map("bots")
 }
 
@@ -131,15 +149,27 @@ enum ConversationStatus {
 }
 
 model Conversation {
-  id              String             @id @default(uuid())
-  botId           String
-  status          ConversationStatus @default(ACTIVE)
-  assignedAgentId String?
-  createdAt       DateTime           @default(now())
-  updatedAt       DateTime           @updatedAt
+  id                String             @id @default(uuid())
+  botId             String
+  status            ConversationStatus @default(ACTIVE)
+  assignedAgentId   String?
+  /// When the conversation last escalated to a human (BOT_IMPLEMENTATION_PLAN.md §9.3).
+  /// Null means it never has. Kept as columns rather than a table: there is no queue,
+  /// no assignment flow and no history — three fields do not justify normalisation.
+  escalatedAt       DateTime?
+  /// The reason code that triggered the escalation (e.g. "LLM_INSUFFICIENT_INFORMATION").
+  escalationReason  String?            @db.VarChar(64)
+  /// Whether the escalation happened outside the bot's configured business hours.
+  escalatedOffHours Boolean?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
 
-  bot      Bot       @relation(fields: [botId], references: [id], onDelete: Cascade)
-  messages Message[]
+  bot              Bot                  @relation(fields: [botId], references: [id], onDelete: Cascade)
+  messages         Message[]
+  /// Contact details a customer supplied for this conversation (§14.6). Deliberately not
+  /// a Customer entity — AssistIQ has no end-user identity system.
+  contact          ConversationContact?
+  messageFeedbacks MessageFeedback[]
 
   @@index([botId])
   @@map("conversations")
@@ -150,9 +180,14 @@ model Message {
   conversationId String
   role           MessageRole
   content        String
+  /// Source references for an ASSISTANT message when the bot shows knowledge sources
+  /// (§15.3): `[{ chunkId, sourceId, topic, pageNumber }]`. Null when sources are off,
+  /// which is the default — so the default path writes no new data.
+  sources        Json?
   createdAt      DateTime    @default(now())
 
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  conversation Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  feedback     MessageFeedback?
 
   @@index([conversationId])
   @@map("messages")
@@ -194,12 +229,327 @@ model AIModel {
 
   /// `Restrict`, not `Cascade`: a raw provider delete must not silently remove catalog
   /// rows. Removing a provider is an explicit two-step operation (models, then provider).
-  provider AIProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
-  bots     Bot[]
+  provider     AIProvider @relation(fields: [providerId], references: [id], onDelete: Restrict)
+  /// Bots that run on this model, and bots that fall back to it (§13). The two relations
+  /// are named because Prisma cannot infer which FK belongs to which.
+  bots         Bot[]      @relation("BotPrimaryModel")
+  fallbackBots Bot[]      @relation("BotFallbackModel")
+
+  /// Declared generation-parameter support (BOT_IMPLEMENTATION_PLAN.md §12). Shape:
+  /// `{ temperature, topP, maxTokens, frequencyPenalty, presencePenalty, reasoningEffort }`.
+  /// Null means "inherit the provider's default capability set". `reasoningEffort` is a
+  /// RESERVED key — no code in this feature reads or writes it.
+  capabilities Json?
 
   /// The same provider-native id cannot be catalogued twice under one provider.
   @@unique([providerId, providerModelId])
   @@index([providerId])
   @@index([enabled])
   @@map("ai_models")
+}
+
+// ---------------------------------------------------------------------------
+// Document knowledge management
+// ---------------------------------------------------------------------------
+
+/// Status of a knowledge source (document) through its lifecycle.
+///
+/// Deliberately has no REJECTED member: a rejected file (wrong type, too large)
+/// never entered the pipeline and leaves no row. `REJECTED` exists only as a
+/// per-file result in the batch upload response — it is never persisted.
+enum KnowledgeSourceStatus {
+  PENDING
+  PROCESSING
+  PROCESSED
+  FAILED
+}
+
+/// A document or other source from which knowledge chunks are derived.
+/// Preserves metadata about the original source even when the physical file is no
+/// longer stored (the upload buffer is discarded once ingestion completes).
+model KnowledgeSource {
+  id             String                @id @default(uuid())
+  botId          String
+  /// Original filename or source label (e.g. "company-handbook.pdf").
+  filename       String
+  /// MIME type of the original file (e.g. "application/pdf").
+  mimeType       String?
+  /// Size of the original file in bytes.
+  fileSizeBytes  Int?
+  /// Ingestion lifecycle state.
+  status         KnowledgeSourceStatus @default(PENDING)
+  /// Number of pages extracted from the source (PDF pages, DOCX paragraphs).
+  pagesExtracted Int?
+  /// Number of chunks created from this source.
+  chunksCreated  Int?
+  /// Human-readable error message if status is FAILED.
+  errorMessage   String?
+  /// Optional user-provided topic/category for the entire source.
+  topic          String?
+  createdAt      DateTime              @default(now())
+  updatedAt      DateTime              @updatedAt
+
+  bot    Bot              @relation(fields: [botId], references: [id], onDelete: Cascade)
+  chunks KnowledgeChunk[]
+
+  @@index([botId])
+  @@index([status])
+  @@map("knowledge_sources")
+}
+
+/// An individual chunk of knowledge with its content and embedding metadata.
+/// These are the first-class, user-manageable knowledge units.
+///
+/// The row id is shared with the pgvector `knowledge_chunks` row for the same
+/// chunk, so the two stores are joined by id and nothing else.
+model KnowledgeChunk {
+  id                 String    @id @default(uuid())
+  sourceId           String
+  botId              String
+  /// The chunk's text content. Editable by users.
+  content            String
+  /// Sequential index within the source document (0-based).
+  chunkIndex         Int
+  /// Page number in the original document (when available, e.g. PDFs).
+  pageNumber         Int?
+  /// Section/heading from the original document (when available).
+  section            String?
+  /// Topic/category for this chunk (inherited from source or classified).
+  topic              String?
+  /// Whether this chunk participates in retrieval. Enforced at the SQL level in
+  /// the pgvector search, never by post-filtering results.
+  enabled            Boolean   @default(true)
+  /// Monotonically increasing version, bumped on every content edit.
+  version            Int       @default(1)
+  /// The embedding model that produced the current embedding.
+  embeddingModel     String?
+  /// The dimensionality of the current embedding vector.
+  embeddingDimension Int?
+  /// When the current embedding was last generated.
+  lastEmbeddedAt     DateTime?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  source KnowledgeSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  bot    Bot             @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  @@index([botId])
+  @@index([sourceId])
+  @@index([botId, enabled])
+  @@map("knowledge_chunks_meta")
+}
+
+/// Platform-wide settings. Exactly one row exists, addressed by a fixed id.
+///
+/// A singleton row (rather than key/value pairs) keeps values typed, validated,
+/// and migrated by Prisma; adding a setting later is a normal column migration.
+/// The singleton invariant is enforced by the service layer always addressing
+/// `id = "singleton"` — nothing at the database level prevents a second row.
+model PlatformSetting {
+  /// Always the literal string "singleton" — enforced by the service layer.
+  id                        String   @id @default("singleton")
+  /// Maximum size of a single uploaded file, in bytes.
+  maxUploadFileSizeBytes    Int      @default(10485760) // 10 MB
+  /// Maximum number of files accepted in one multi-document upload request.
+  maxUploadFilesPerRequest  Int      @default(10)
+  /// Maximum combined size of all files in one request, in bytes.
+  maxUploadTotalBytes       Int      @default(52428800) // 50 MB
+  /// Maximum chunks a single document may produce, guarding embed cost.
+  maxChunksPerSource        Int      @default(5000)
+  /// Maximum total chunks a single bot may hold. 0 means unlimited.
+  maxChunksPerBot           Int      @default(0)
+  /// Absolute ceiling the AI service will accept, independent of the values
+  /// above. Exists so a mis-set limit can never hand the AI service an
+  /// unbounded body.
+  aiServiceMaxFileSizeBytes Int      @default(104857600) // 100 MB
+  createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @updatedAt
+
+  @@map("platform_settings")
+}
+
+// ---------------------------------------------------------------------------
+// Bot configuration (see docs/BOT_IMPLEMENTATION_PLAN.md)
+// ---------------------------------------------------------------------------
+
+/// The assistant's personality preset. CUSTOM defers to `customPersonality`.
+enum BotPersonality {
+  PROFESSIONAL
+  FRIENDLY
+  CONCISE
+  WARM
+  TECHNICAL
+  CASUAL
+  CUSTOM
+}
+
+/// The assistant's tone of voice, orthogonal to personality.
+enum BotTone {
+  NEUTRAL
+  FORMAL
+  FRIENDLY
+  EMPATHETIC
+  DIRECT
+}
+
+/// How long the assistant's answers should be. BALANCED adds no instruction and no
+/// `max_tokens`, so it is exactly today's behaviour.
+enum ResponseLength {
+  SHORT
+  BALANCED
+  LONG
+}
+
+/// How strictly the assistant must ground its answer in retrieved knowledge (§15.2).
+enum KnowledgeStrictness {
+  STRICT
+  BALANCED
+  FLEXIBLE
+}
+
+/// What happens when a customer explicitly asks for a human (§14.4).
+enum HumanRequestBehavior {
+  TRANSFER_AUTOMATICALLY
+  UNAVAILABLE_MESSAGE
+  CONTINUE_WITH_AI
+}
+
+/// What happens to an escalation that occurs outside configured business hours (§14.3).
+enum AfterHoursBehavior {
+  MESSAGE_ONLY
+  MESSAGE_AND_ESCALATE
+  ESCALATE
+}
+
+/// Whether a customer found an assistant message helpful.
+enum FeedbackRating {
+  UP
+  DOWN
+}
+
+/// A bot's configuration. Exactly one row per bot, and **an absent row means every
+/// documented default** (BOT_IMPLEMENTATION_PLAN.md §8) — a first-class state, not a
+/// migration artefact. That is why `resolveBotConfig` merges over `botDefaults.ts` and
+/// why "reset to recommended" needs no backfill.
+///
+/// Typed columns hold everything the application BRANCHES on. The `Json` columns hold
+/// whole-value lists that are never queried relationally, never joined and always replaced
+/// in full; they are validated by Zod at the API boundary. Normalise one of them only when
+/// a feature actually needs to query it.
+model BotConfiguration {
+  id    String @id @default(uuid())
+  botId String @unique
+  bot   Bot    @relation(fields: [botId], references: [id], onDelete: Cascade)
+
+  // --- Appearance ---
+  /// Overrides `Bot.name` in the chat surface when set. Null falls back to `name`.
+  displayName     String?   @db.VarChar(60)
+  /// Avatar bytes. Stored in Postgres rather than on disk because the deployment is
+  /// containerised (a local path is not shared and is lost on redeploy) and because
+  /// nothing else in this repo uses object storage. See §9.5.
+  avatarData      Bytes?
+  avatarMimeType  String?
+  avatarUpdatedAt DateTime?
+  /// Bumped on every avatar write. Doubles as the ETag for `GET /bots/:botId/avatar`.
+  avatarVersion   Int       @default(0)
+
+  // --- Personality & instructions ---
+  personality        BotPersonality @default(PROFESSIONAL)
+  tone               BotTone        @default(NEUTRAL)
+  customPersonality  String?        @db.VarChar(500)
+  /// Owner-authored instructions. Rendered as the LOWEST-priority prompt block, fenced
+  /// and permanently subordinated to AssistIQ's core rules (§7). The API rejects any
+  /// value containing the INSUFFICIENT_INFORMATION sentinel.
+  customInstructions String?        @db.VarChar(4000)
+  /// "AUTO" (no instruction emitted) or an ISO 639-1 / BCP-47 tag.
+  responseLanguage   String         @default("AUTO") @db.VarChar(16)
+  responseLength     ResponseLength @default(BALANCED)
+
+  // --- Conversation ---
+  welcomeMessage        String? @db.VarChar(500)
+  /// Intro card: `{ headline, body, ctaLabel? }`. Null means no starter card.
+  conversationStarter   Json?
+  /// `string[]` — clickable question chips (max 6, each ≤ 120 chars).
+  suggestedQuestions    Json    @default("[]")
+  inputPlaceholder      String? @db.VarChar(120)
+  /// `string[]` — messages rotated while a reply is generated (max 5, each ≤ 60 chars).
+  thinkingMessages      Json    @default("[]")
+  feedbackEnabled       Boolean @default(false)
+  /// Only meaningful while `feedbackEnabled`; inert otherwise.
+  feedbackCollectReason Boolean @default(true)
+
+  // --- Knowledge ---
+  knowledgeEnabled    Boolean             @default(true)
+  knowledgeStrictness KnowledgeStrictness @default(BALANCED)
+  showSources         Boolean             @default(false)
+  retrievalTopK       Int                 @default(3)
+
+  // --- Generation ---
+  /// Defaults to 0.0 — the value hard-coded in the pipeline before this feature existed.
+  temperature      Float  @default(0.0)
+  /// Null means "do not send the parameter at all", which is the pre-feature behaviour.
+  topP             Float?
+  frequencyPenalty Float?
+  presencePenalty  Float?
+  maxOutputTokens  Int?
+
+  // --- Human support ---
+  humanFallbackEnabled Boolean              @default(true)
+  /// Overrides the conversational fallback copy for THIS bot. Null keeps the platform
+  /// copy. Platform-fault reasons (MODEL_*) are never overridable (§11.6).
+  fallbackMessage      String?              @db.VarChar(500)
+  humanRequestBehavior HumanRequestBehavior @default(TRANSFER_AUTOMATICALLY)
+  handoffMessage       String?              @db.VarChar(500)
+  /// `{ timezone, windows: [{day,start,end}], afterHoursBehavior, afterHoursMessage }`.
+  businessHours        Json?
+  /// `{ enabled, fields: string[], required: string[] }`.
+  contactCollection    Json?
+
+  /// Optimistic concurrency for PATCH (§22). This is NOT configuration history —
+  /// versioning, diffing and rollback are deliberately deferred (Tier 3).
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("bot_configurations")
+}
+
+/// Per-assistant-message feedback (§10.6). At most one row per message, so re-rating
+/// updates rather than duplicates.
+model MessageFeedback {
+  id             String         @id @default(uuid())
+  messageId      String         @unique
+  conversationId String
+  rating         FeedbackRating
+  /// One of the fixed vocabulary: INACCURATE, NOT_HELPFUL, WRONG_SOURCE, INCOMPLETE, OTHER.
+  reason         String?        @db.VarChar(120)
+  comment        String?        @db.VarChar(1000)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  message      Message      @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@map("message_feedback")
+}
+
+/// Contact details a customer supplied for a conversation (§14.6).
+///
+/// Deliberately NOT a Customer entity: AssistIQ has no end-user identity model, and
+/// inventing one is out of scope. This is per-conversation PII — excluded from list
+/// endpoints, never logged by value, and cascaded with its conversation.
+model ConversationContact {
+  id             String   @id @default(uuid())
+  conversationId String   @unique
+  name           String?  @db.VarChar(120)
+  email          String?  @db.VarChar(254)
+  phone          String?  @db.VarChar(40)
+  orderId        String?  @db.VarChar(120)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@map("conversation_contacts")
 }

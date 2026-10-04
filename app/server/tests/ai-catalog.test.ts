@@ -568,20 +568,38 @@ describe('AI catalog — response projections', () => {
    * into a masked string ("sk-or-…abcd") fails rather than quietly shipping a credential
    * fragment to the browser.
    */
-  const walk = (value: unknown, visit: (key: string, value: unknown) => void, key = '$'): void => {
+  const walk = (
+    value: unknown,
+    visit: (key: string, value: unknown, path: string) => void,
+    key = '$'
+  ): void => {
     if (Array.isArray(value)) {
       value.forEach((item, index) => walk(item, visit, `${key}[${index}]`));
       return;
     }
     if (value !== null && typeof value === 'object') {
       for (const [childKey, childValue] of Object.entries(value)) {
-        visit(childKey, childValue);
+        visit(childKey, childValue, `${key}.${childKey}`);
         walk(childValue, visit, `${key}.${childKey}`);
       }
     }
   };
 
   const CREDENTIAL_KEY = /(api[_-]?key|secret|token|password|credential)/i;
+
+  /**
+   * `capabilities` is served to workspaces (§10.3), so its keys are scanned like any other —
+   * and one of them, `maxTokens`, is a substring match on "token" while being a model
+   * generation-parameter flag, not key material.
+   *
+   * The exemption is **structural, not a name on a list**. It applies only at
+   * `<…>.capabilities.maxTokens` and only when the value is a boolean, so a field called
+   * `maxTokens` anywhere else in the payload is still an offender, and a later change that
+   * turned this one into a string carrying key material fails here — the same
+   * name-plus-asserted-type reasoning `credentialConfigured` uses above.
+   */
+  const isCapabilityFlag = (path: string, value: unknown): boolean =>
+    path.endsWith('.capabilities.maxTokens') && typeof value === 'boolean';
 
   it('no key anywhere in the platform or workspace catalog payload is credential-shaped', async () => {
     setPlatformRole('PLATFORM_OWNER');
@@ -607,8 +625,13 @@ describe('AI catalog — response projections', () => {
 
     const offenders: string[] = [];
     for (const payload of [...platformPayloads, workspacePayload]) {
-      walk(payload, (key) => {
-        if (CREDENTIAL_KEY.test(key) && key !== 'credentialConfigured') offenders.push(key);
+      walk(payload, (key, value, path) => {
+        if (!CREDENTIAL_KEY.test(key)) return;
+        if (key === 'credentialConfigured') return;
+        if (isCapabilityFlag(path, value)) return;
+        // The path, not the bare key: a failure should say *where* the credential-shaped
+        // field appeared, so it is actionable without re-running with a debugger.
+        offenders.push(path);
       });
     }
     expect(offenders).toEqual([]);

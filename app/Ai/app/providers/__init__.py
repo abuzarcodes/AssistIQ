@@ -13,6 +13,7 @@ route.
 """
 
 from app.providers.base import (
+    GenerationParams,
     LLMProvider,
     ProviderError,
     ProviderErrorKind,
@@ -27,6 +28,7 @@ from app.providers.registry import (
 )
 
 __all__ = [
+    "GenerationParams",
     "LLMProvider",
     "ProviderError",
     "ProviderErrorKind",

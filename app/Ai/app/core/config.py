@@ -130,10 +130,42 @@ class Settings(BaseSettings):
     # AI Pipeline Thresholds
     CLASSIFICATION_CONFIDENCE_THRESHOLD: float = 0.60
     RETRIEVAL_CONFIDENCE_THRESHOLD: float = 0.65
+
+    #: Wall-clock budget for the *generation* step of one message, in seconds.
+    #:
+    #: Only failover reads this, and it exists because two sequential provider timeouts can
+    #: outlast Node's own `AI_SERVICE_TIMEOUT`: the primary is given its adapter's full
+    #: timeout, and whatever remains of this budget then caps the fallback attempt. If less
+    #: than a few seconds remain, the fallback is skipped rather than started, so a
+    #: double-timeout surfaces as a graceful reason-coded fallback instead of an
+    #: AI-service-unavailable error. Bounds the whole step; see plan §13.5.
+    GENERATION_BUDGET_SECONDS: float = 20.0
+
+    #: The floor on that budget (plan §13.5). A fallback attempt is *skipped*, not started,
+    #: when less than this remains: an attempt begun with two seconds left is an attempt that
+    #: will be killed mid-flight, producing the AI-service-unavailable error the budget exists
+    #: to prevent, and paying the provider for a call nobody reads. Skipping it instead means
+    #: the primary's failure is reported immediately and honestly.
+    FAILOVER_MIN_REMAINING_SECONDS: float = 3.0
     
     # Chunking Configuration
     CHUNK_SIZE: int = 800
     CHUNK_OVERLAP: int = 100
+
+    # Document Upload Limits
+    # Absolute safety ceiling this service will accept for a single uploaded file.
+    # This is a BACKSTOP, not the operator-facing limit: the Express server owns the
+    # configurable `maxUploadFileSizeBytes` setting and rejects oversized files before
+    # they reach here. If this ceiling ever rejects a file, something upstream is
+    # broken — it should never be the reason a legitimate upload fails.
+    AI_MAX_FILE_SIZE_BYTES: int = 100 * 1024 * 1024  # 100 MB
+
+    # Absolute safety ceiling on how many chunks one source may produce. Like the
+    # file-size ceiling above, the operator-facing `maxChunksPerSource` setting on the
+    # Express server is stricter (default 5000) and rejects oversized documents before
+    # they reach here. This backstop exists so a mis-set limit cannot turn a single
+    # upload into an unbounded embedding bill.
+    AI_MAX_CHUNKS_PER_SOURCE: int = 20000
 
     model_config = SettingsConfigDict(
         env_file=".env",

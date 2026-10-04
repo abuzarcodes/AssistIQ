@@ -13,8 +13,10 @@ import * as aiCatalogController from '../controllers/aiCatalog.controller.js';
  * (`PATCH /bots/:botId/model`, gated on `bots:manage`), not on reading the list of
  * options.
  *
- * The projection is fixed by `listSelectableModels`: `{ id, displayName, provider }`, with
- * `providerModelId` deliberately absent.
+ * The projection is fixed by `listSelectableModels`: `{ id, displayName, provider,
+ * capabilities }`, with `providerModelId` deliberately absent. `capabilities` rides along
+ * so the model selector can also grey out the generation controls the chosen model cannot
+ * honour (§12.3) without a second round trip that could disagree with the first.
  */
 const router = Router();
 
