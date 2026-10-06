@@ -13,12 +13,6 @@
 ## What is AssistIQ?
 
 AssistIQ is a platform where businesses create **Workspaces**, build **Bots**, fill them with **Knowledge** (FAQ entries or documents), and let those bots answer customer questions in real time. The AI pipeline is designed to **never hallucinate** — it retrieves grounded context, generates strictly from it, and escalates to a human when it can't help.
-
-Two principles drive every design decision:
-
-1. **Strict tenant isolation.** A user must never read or write another user's data. Enforced at the database-query level, not just in UI or middleware.
-2. **No hallucinations.** A trained ML classifier routes the query, vector search retrieves grounded context, and a temperature-0 LLM generates *only* from that context — with explicit fallback at every stage.
-
 ---
 
 ## Architecture Overview
