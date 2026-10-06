@@ -1,0 +1,198 @@
+@import "tailwindcss";
+@plugin "@tailwindcss/typography";
+:root {
+  /* Neutral palette */
+  --gray-50: #f9fafb;
+  --gray-100: #f3f4f6;
+  --gray-200: #e5e7eb;
+  --gray-300: #d1d5db;
+  --gray-400: #9ca3af;
+  --gray-500: #6b7280;
+  --gray-600: #4b5563;
+  --gray-700: #374151;
+  --gray-800: #1f2937;
+  --gray-900: #111827;
+  --gray-950: #030712;
+
+  /* Accent */
+  --accent-50: #eef2ff;
+  --accent-100: #e0e7ff;
+  --accent-200: #c7d2fe;
+  --accent-400: #818cf8;
+  --accent-500: #6366f1;
+  --accent-600: #4f46e5;
+  --accent-700: #4338ca;
+
+  /* Status */
+  --green-500: #22c55e;
+  --green-600: #16a34a;
+  --green-50: #f0fdf4;
+  --red-500: #ef4444;
+  --red-600: #dc2626;
+  --red-50: #fef2f2;
+  --amber-500: #f59e0b;
+  --amber-50: #fffbeb;
+  --blue-500: #3b82f6;
+  --blue-50: #eff6ff;
+
+  /* Theme tokens */
+  --background: #ffffff;
+  --foreground: var(--gray-900);
+  --muted: var(--gray-100);
+  --muted-foreground: var(--gray-500);
+  --border: var(--gray-200);
+  --card: #ffffff;
+  --card-foreground: var(--gray-900);
+  --sidebar: var(--gray-50);
+  --sidebar-foreground: var(--gray-700);
+  --sidebar-border: var(--gray-200);
+  --sidebar-active: var(--accent-50);
+  --sidebar-active-foreground: var(--accent-700);
+
+  /* Checkpoint 8 — the minimum extra tokens the configuration center needs. Each is a
+     token reference, never a literal, so a future global theme change flows through. */
+  --overlay: color-mix(in srgb, var(--gray-950) 40%, transparent);
+  --info: var(--blue-500);
+  --info-foreground: #ffffff;
+  --success-muted: var(--green-50);
+  --warning-foreground: var(--gray-900);
+  --disabled: var(--gray-100);
+
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: var(--gray-950);
+    --foreground: var(--gray-100);
+    --muted: var(--gray-800);
+    --muted-foreground: var(--gray-400);
+    --border: var(--gray-800);
+    --card: var(--gray-900);
+    --card-foreground: var(--gray-100);
+    --sidebar: var(--gray-900);
+    --sidebar-foreground: var(--gray-300);
+    --sidebar-border: var(--gray-800);
+    --sidebar-active: color-mix(in srgb, var(--accent-600) 15%, transparent);
+    --sidebar-active-foreground: var(--accent-400);
+    --overlay: color-mix(in srgb, var(--gray-950) 60%, transparent);
+    --info: var(--blue-500);
+    --info-foreground: var(--gray-950);
+    --success-muted: color-mix(in srgb, var(--green-600) 15%, transparent);
+    --warning-foreground: var(--gray-100);
+    --disabled: var(--gray-800);
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-border: var(--border);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-active: var(--sidebar-active);
+  --color-sidebar-active-foreground: var(--sidebar-active-foreground);
+  --color-accent: var(--accent-500);
+  --color-accent-foreground: #ffffff;
+  --color-destructive: var(--red-600);
+  --color-destructive-foreground: #ffffff;
+  --color-success: var(--green-600);
+  --color-success-foreground: #ffffff;
+  --color-warning: var(--amber-500);
+
+  /* Checkpoint 8 — new semantic tokens, mapped so they generate utilities. */
+  --color-overlay: var(--overlay);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --color-success-muted: var(--success-muted);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-disabled: var(--disabled);
+
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+/* Base */
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), system-ui, sans-serif;
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--gray-300);
+  border-radius: 3px;
+}
+
+@media (prefers-color-scheme: dark) {
+  ::-webkit-scrollbar-thumb {
+    background: var(--gray-700);
+  }
+}
+
+/* Focus ring */
+*:focus-visible {
+  outline: 2px solid var(--accent-500);
+  outline-offset: 2px;
+}
+
+/* Animations */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slide-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.95); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes pulse-dot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.5; }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out;
+}
+
+.animate-slide-in {
+  animation: slide-in 0.2s ease-out;
+}
+
+.animate-scale-in {
+  animation: scale-in 0.15s ease-out;
+}
+
+.animate-spin {
+  animation: spin 1s linear infinite;
+}
+
+.animate-pulse-dot {
+  animation: pulse-dot 2s ease-in-out infinite;
+}
