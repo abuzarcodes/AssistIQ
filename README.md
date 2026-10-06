@@ -235,12 +235,8 @@ AssistIQ/
 │       │   └── core/         Config, constants, redaction
 │       ├── models/           Trained ML artifacts (.joblib)
 │       └── tests/
-│
-└── docs/                     Implementation plans
-    ├── BOT_IMPLEMENTATION_PLAN.md
-    ├── DOCUMENT_KNOWLEDGE_IMPLEMENTATION_PLAN.md
-    ├── Model_IMPLEMENTATION_PLAN.md
-    └── RBAC_IMPLEMENTATION_PLAN.md
+
+
 ```
 
 ---
