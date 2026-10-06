@@ -21,7 +21,7 @@ AssistIQ is a **monorepo** with three independently runnable services under [`ap
 
 | Service | Stack | Port | Role |
 |---------|-------|------|------|
-| [**Client**](app/client/) | Next.js 16, React 19, Tailwind v4 | `3000` | User-facing dashboard & chat UI |
+| [**Client**](app/Client/) | Next.js 16, React 19, Tailwind v4 | `3000` | User-facing dashboard & chat UI |
 | [**Server**](app/server/) | Node 20, Express 4, Prisma 6, PostgreSQL 16 | `5000` | API orchestrator, auth, business logic, tenant isolation |
 | [**AI**](app/Ai/) | Python 3.12, FastAPI, LangChain, pgvector, scikit-learn | `8000` | RAG pipeline, ML classification, LLM generation |
 
@@ -253,7 +253,7 @@ Each service has its own detailed README with setup, configuration, API referenc
 |-----------|--------|------------------|
 | **Server** | [`app/server/README.md`](app/server/README.md) | Full API reference, environment variables, Prisma schema, RBAC details, testing guide, auth flow, AI service boundary |
 | **AI Service** | [`app/Ai/README.md`](app/Ai/README.md) | Pipeline architecture, provider layer & model catalog, adapter contract, failure handling, environment variables, multi-tenancy |
-| **Client** | [`app/client/README.md`](app/client/README.md) | Next.js setup and development |
+| **Client** | [`app/client/README.md`](app/Client/README.md) | Next.js setup and development |
 
 ---
 
