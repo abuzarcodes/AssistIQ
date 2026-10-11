@@ -32,12 +32,21 @@ const prismaMock = vi.hoisted(() => ({
   // Checkpoint 5: the message path resolves the bot configuration as well as its model.
   botConfiguration: { findUnique: vi.fn() },
   knowledgeSource: { findMany: vi.fn() },
+  // CP3: the chat turn commits the assistant message and any escalation in one interactive
+  // transaction, so the message path now touches the audit table and `$transaction`.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
+  $transaction: vi.fn(),
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn(), getAiStatus: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+// Assigned once, because `vi.clearAllMocks()` clears calls rather than implementations.
+prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) =>
+  fn(prismaMock)
+);
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -108,8 +117,7 @@ const providerView = () => ({
 beforeEach(() => {
   vi.clearAllMocks();
 
-  // Reset the world to the scenario's starting state, so each test is independent.
-  catalog.provider.enabled = true;
+  // Reset the world to the scenario's starting state, so each test is independent.  catalog.provider.enabled = true;
   catalog.models[0].enabled = true;
   catalog.models[1].enabled = true;
   catalog.bots[0].aiModelId = MODEL_A;
@@ -191,14 +199,23 @@ beforeEach(() => {
   );
 
   // --- Conversation flow ---
+  //
+  // One row, two readers: `bot.workspaceId` answers the permission middleware's scope
+  // resolution, `status`/`version` answer the CP3 turn's pre-flight gate and OCC expectation.
+  // The lifecycle state is part of the row's identity here rather than an afterthought — a
+  // turn that read `undefined` for `status` would bypass the AI, and every assertion in this
+  // file about whether the AI was reached would silently become vacuous.
   const conversations: Record<string, string> = { [CONV_A]: BOT_A, [CONV_B]: BOT_B };
   prismaMock.conversation.findUnique.mockImplementation(async ({ where }: { where: { id: string } }) =>
-    conversations[where.id] ? { bot: { workspaceId: WORKSPACE_ID } } : null
+    conversations[where.id]
+      ? { bot: { workspaceId: WORKSPACE_ID }, status: 'ACTIVE', version: 1 }
+      : null
   );
   prismaMock.conversation.findFirst.mockImplementation(async ({ where }: { where: { id: string } }) =>
     conversations[where.id] ? { id: where.id, botId: conversations[where.id] } : null
   );
   prismaMock.conversation.update.mockResolvedValue({ id: CONV_A, status: 'WAITING_FOR_HUMAN' });
+
 
   prismaMock.bot.findFirst.mockImplementation(async ({ where }: { where: { id: string } }) => {
     const bot = findBot(where.id);
@@ -258,6 +275,20 @@ const clearBotModel = (botId: string) =>
 
 const lastChatPayload = () => aiMock.chat.mock.calls.at(-1)?.[0] as Record<string, unknown>;
 
+/**
+ * The `conversation.update` calls that changed the lifecycle.
+ *
+ * A successful CP3 turn writes the conversation more than once — the per-message `updatedAt`
+ * touch (§9.3 Phase 1) and the OCC version bump that closes Phase 3 (§9.2) are bookkeeping,
+ * and only an escalation carries a `status`. This scenario cares about escalations, so it
+ * asserts on the transitions rather than on the total call count, which grows with every
+ * message the scenario sends.
+ */
+const statusTransitions = () =>
+  prismaMock.conversation.update.mock.calls.filter(
+    ([args]) => (args as { data: Record<string, unknown> }).data.status !== undefined
+  );
+
 // ---------------------------------------------------------------------------------------
 // The integration scenario
 // ---------------------------------------------------------------------------------------
@@ -274,7 +305,7 @@ describe('disable-after-assignment: the full lifecycle', () => {
       provider: 'openrouter',
       model_id: 'openai/gpt-4o-mini',
     });
-    expect(prismaMock.conversation.update).not.toHaveBeenCalled();
+    expect(statusTransitions()).toHaveLength(0);
 
     // --- Step 2: the platform owner disables the model ---
     const disabled = await setModelEnabled(MODEL_A, false);
@@ -293,10 +324,12 @@ describe('disable-after-assignment: the full lifecycle', () => {
     expect(blocked.body.data.ai.fallback_required).toBe(true);
     expect(blocked.body.data.ai.reason).toBe(AI_FAILURE_REASON.MODEL_UNAVAILABLE);
 
-    // The escalation shape: exactly one update, carrying the status and the Checkpoint 5
-    // escalation metadata (reason, time, off-hours flag).
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
-    expect(prismaMock.conversation.update).toHaveBeenCalledWith({
+    // The escalation shape: exactly one *status* transition, carrying the Checkpoint 5
+    // escalation metadata (reason, time, off-hours flag). The scenario has sent two messages
+    // by now, and each turn also touches `updatedAt` and bumps the version, so the total
+    // `conversation.update` count is not the thing this step is about.
+    expect(statusTransitions()).toHaveLength(1);
+    expect(statusTransitions()[0][0]).toMatchObject({
       where: { id: CONV_A },
       data: expect.objectContaining({ status: 'WAITING_FOR_HUMAN' }),
     });
@@ -341,7 +374,8 @@ describe('disable-after-assignment: the full lifecycle', () => {
       provider: 'openrouter',
       model_id: 'anthropic/claude-sonnet-4',
     });
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
+    // Two chats ran; only the one whose model was disabled escalated.
+    expect(statusTransitions()).toHaveLength(1);
   });
 
   it('disabling the provider has identical outcomes to disabling the model', async () => {
@@ -379,7 +413,7 @@ describe('disable-after-assignment: the full lifecycle', () => {
     // because this bot has no assignment.
     expect(Object.keys(lastChatPayload()).sort()).toEqual(['bot_id', 'config', 'message']);
     expect('model' in lastChatPayload()).toBe(false);
-    expect(prismaMock.conversation.update).not.toHaveBeenCalled();
+    expect(statusTransitions()).toHaveLength(0);
   });
 
   it('a model re-enabled after a clear still requires a new assignment to take effect', async () => {

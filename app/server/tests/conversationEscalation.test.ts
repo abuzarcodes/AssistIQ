@@ -25,12 +25,29 @@ const prismaMock = vi.hoisted(() => ({
   knowledgeSource: { findMany: vi.fn() },
   messageFeedback: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
   conversationContact: { upsert: vi.fn() },
+  // CP3: the escalation now commits the status transition and its audit event together in
+  // one interactive transaction, so the message path touches both.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
+  $transaction: vi.fn(),
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+/**
+ * Re-apply the transaction shim before each test.
+ *
+ * `vi.resetAllMocks()` in `beforeEach` below clears *implementations*, not just calls — unlike
+ * the `vi.clearAllMocks()` the other chat suites use — so this cannot be assigned once at
+ * module level. Left unset, `$transaction` returns `undefined`, the turn destructures it, and
+ * every escalation test fails 500 for a reason that has nothing to do with escalation.
+ */
+const stubTransaction = () =>
+  prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) =>
+    fn(prismaMock)
+  );
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -60,7 +77,13 @@ const configRow = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const primeConversation = (configOverrides: Record<string, unknown> = {}) => {
-  prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+  // One object for one row: `bot.workspaceId` for the middleware, `status`/`version` for the
+  // CP3 turn's gate and OCC expectation.
+  prismaMock.conversation.findUnique.mockResolvedValue({
+    bot: { workspaceId: WORKSPACE_ID },
+    status: 'ACTIVE',
+    version: 1,
+  });
   prismaMock.workspaceMember.findUnique.mockResolvedValue({
     id: 'm',
     userId: USER_ID,
@@ -96,8 +119,22 @@ const send = (content = 'help') =>
     .set('Authorization', authHeader())
     .send({ content });
 
+/**
+ * The `conversation.update` calls that changed the lifecycle.
+ *
+ * A successful CP3 turn writes the conversation more than once: the per-message `updatedAt`
+ * touch (§9.3 Phase 1) and the OCC version bump that closes Phase 3 (§9.2) are bookkeeping;
+ * only an escalation carries a `status`. These tests are about the escalation policy, so they
+ * assert on the transitions rather than on the total call count.
+ */
+const statusTransitions = () =>
+  prismaMock.conversation.update.mock.calls.filter(
+    ([args]) => (args as { data: Record<string, unknown> }).data.status !== undefined
+  );
+
 beforeEach(() => {
   vi.resetAllMocks();
+  stubTransaction();
 });
 
 // ---------------------------------------------------------------------------------------
@@ -298,8 +335,8 @@ describe('POST messages — escalation is persisted exactly as the policy decide
     const res = await send();
 
     expect(res.status).toBe(201);
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
-    const { data } = prismaMock.conversation.update.mock.calls[0][0];
+    expect(statusTransitions()).toHaveLength(1);
+    const { data } = statusTransitions()[0][0];
     expect(data).toMatchObject({
       status: 'WAITING_FOR_HUMAN',
       escalationReason: 'NO_RELEVANT_KNOWLEDGE',
@@ -321,7 +358,9 @@ describe('POST messages — escalation is persisted exactly as the policy decide
     const res = await send();
 
     expect(res.status).toBe(201);
-    expect(prismaMock.conversation.update).not.toHaveBeenCalled();
+    // No *status* transition: the turn still touches `updatedAt` and bumps the version, which
+    // is why this asserts on the transitions rather than on `conversation.update` at large.
+    expect(statusTransitions()).toHaveLength(0);
     expect(res.body.data.assistantMessage.content).toBe('Owner copy');
     expect(res.body.data.escalation).toBeUndefined();
   });
@@ -337,8 +376,8 @@ describe('POST messages — escalation is persisted exactly as the policy decide
 
     const res = await send('I want to talk to a human');
 
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
-    const { data } = prismaMock.conversation.update.mock.calls[0][0];
+    expect(statusTransitions()).toHaveLength(1);
+    const { data } = statusTransitions()[0][0];
     expect(data.escalationReason).toBe('HUMAN_REQUESTED');
     expect(res.body.data.assistantMessage.content).toBe('Here is the answer.');
   });
@@ -357,7 +396,7 @@ describe('POST messages — escalation is persisted exactly as the policy decide
 
     expect(res.status).toBe(201);
     expect(aiMock.chat).not.toHaveBeenCalled();
-    expect(prismaMock.conversation.update).not.toHaveBeenCalled();
+    expect(statusTransitions()).toHaveLength(0);
     expect(res.body.data.assistantMessage.content).toContain('paused');
   });
 });

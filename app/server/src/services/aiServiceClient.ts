@@ -206,6 +206,14 @@ class AIServiceClient {
   private async request<T>(endpoint: string, options: RequestInit): Promise<T> {
     const url = `${this.baseUrl}${endpoint}`;
 
+    // The caller's signal (Phase 2 cancellation) and the timeout are both abort sources:
+    // whichever fires first wins, and neither replaces the other. `AbortSignal.any` is the
+    // only combination that keeps the timeout meaningful for a caller that never aborts.
+    const timeoutSignal = AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS);
+    const signal = options.signal
+      ? AbortSignal.any([options.signal, timeoutSignal])
+      : timeoutSignal;
+
     try {
       const response = await fetch(url, {
         ...options,
@@ -213,7 +221,7 @@ class AIServiceClient {
           ...this.headers,
           ...options.headers,
         },
-        signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
+        signal,
       });
 
       if (!response.ok) {
@@ -224,6 +232,12 @@ class AIServiceClient {
 
       return (await response.json()) as T;
     } catch (error) {
+      // A caller-driven abort is a decision, not a failure: it must reach the caller
+      // unchanged so the turn can be reported as cancelled rather than as an outage.
+      // Checked via the caller's own signal, not `signal`, so a *timeout* still falls
+      // through to the AIServiceError below.
+      if (options.signal?.aborted) throw error;
+
       logger.error({ err: error, url }, 'AI service communication failed');
       if (error instanceof AppError) throw error;
       // A timeout or a refused connection: the AI service never answered, so there is no
@@ -234,10 +248,25 @@ class AIServiceClient {
 
   // --- Core Endpoints ---
 
-  public async chat(payload: ChatPayload): Promise<ChatResponse> {
+  /**
+   * Call the chat pipeline.
+   *
+   * `signal` is the Phase 2 cancellation hook (§9.2): when a conversation leaves `ACTIVE`
+   * mid-generation the caller aborts this request, so the in-flight LLM work is cut off
+   * rather than being paid for and thrown away. It is combined with — never substituted
+   * for — the per-request timeout, so a caller that forgets to abort still cannot hold the
+   * connection open indefinitely.
+   *
+   * The abort is deliberately **not** translated into an `AppError` here. An aborted turn
+   * is a normal outcome of the concurrency design, not an AI-service fault, so this layer
+   * reports it as a plain `AbortError` and lets the caller (which holds the reason)
+   * distinguish "we cancelled this" from "the AI service broke".
+   */
+  public async chat(payload: ChatPayload, signal?: AbortSignal): Promise<ChatResponse> {
     return this.request<ChatResponse>('/api/v1/chat', {
       method: 'POST',
       body: JSON.stringify(payload),
+      ...(signal ? { signal } : {}),
     });
   }
 

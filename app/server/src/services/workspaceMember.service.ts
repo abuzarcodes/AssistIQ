@@ -1,6 +1,11 @@
 import type { WorkspaceMember, WorkspaceRole } from '@prisma/client';
 import prisma from '../config/database.js';
 import { ConflictError, NotFoundError, ValidationError } from '../utils/errors.js';
+import {
+  announceRevokedMemberReleases,
+  releaseConversationsForRevokedMember,
+} from './conversation.service.js';
+import { evictWorkspaceMember } from '../realtime/socketServer.js';
 
 /**
  * Workspace membership CRUD (Checkpoint 4).
@@ -107,10 +112,33 @@ export const updateMemberRole = async (
   });
 };
 
-/** Remove a member from the workspace. The workspace owner cannot be removed. */
+/**
+ * Remove a member from the workspace. The workspace owner cannot be removed.
+ *
+ * The membership delete and the re-queueing of that member's conversations commit together
+ * (§11.3). Without the re-queue, a departing agent's tickets stay `HUMAN_ACTIVE` with an
+ * owner who is no longer in the workspace: absent from the unassigned queue (they have an
+ * owner) and absent from everyone's "my tickets" (the owner is gone). They would simply
+ * disappear.
+ *
+ * The realtime side of the revocation runs strictly *after* that transaction, and in a fixed
+ * order (§20). Eviction comes first: the departing member's socket is still connected and
+ * still holds a valid token, so if the notifications were emitted first, the very member who
+ * just lost access to this workspace would receive `conversation:unassigned` for every ticket
+ * they were handling — a disclosure of customer activity to a non-member, produced by the
+ * mechanism meant to prevent exactly that. Disconnecting changes nothing about the HTTP path
+ * (the token is still valid until it expires, and the membership query is what closes *that*
+ * door); it closes the realtime one, which the token cannot.
+ */
 export const removeMember = async (workspaceId: string, memberId: string): Promise<void> => {
   const member = await getMemberOr404(workspaceId, memberId);
   await assertNotWorkspaceOwner(workspaceId, member);
 
-  await prisma.workspaceMember.delete({ where: { id: memberId } });
+  const released = await prisma.$transaction(async (tx) => {
+    await tx.workspaceMember.delete({ where: { id: memberId } });
+    return releaseConversationsForRevokedMember(tx, workspaceId, member.userId);
+  });
+
+  await evictWorkspaceMember(member.userId, workspaceId);
+  announceRevokedMemberReleases(workspaceId, released);
 };

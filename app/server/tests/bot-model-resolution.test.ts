@@ -19,16 +19,29 @@ const prismaMock = vi.hoisted(() => ({
   workspaceMember: { findUnique: vi.fn(), findFirst: vi.fn() },
   bot: { findUnique: vi.fn() },
   conversation: { findFirst: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+  // CP3: the chat turn commits the assistant message and any escalation in one interactive
+  // transaction, so the message path now touches the audit table and `$transaction`.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
   message: { create: vi.fn() },
   // Checkpoint 5: the message path resolves the bot configuration as well as its model.
   botConfiguration: { findUnique: vi.fn() },
   knowledgeSource: { findMany: vi.fn() },
+  // Interactive transactions receive the same delegate surface as the root client, which is
+  // exactly what `fn(prismaMock)` reproduces.
+  $transaction: vi.fn(),
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+// Assigned once here rather than per-test: `vi.clearAllMocks()` clears calls, not
+// implementations, so this survives the `beforeEach` and a test only states what it cares
+// about.
+prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) =>
+  fn(prismaMock)
+);
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -61,9 +74,17 @@ const modelRow = (overrides: Record<string, unknown> = {}) => ({
  * which resolves `:conversationId` through the conversation, and once by the resolver. Only
  * the resolver's read is arranged here, because the middleware's scope resolution goes
  * through `conversation.findUnique`, primed separately below.
+ *
+ * That `conversation.findUnique` prime carries `status`/`version` as well as the `bot` the
+ * middleware needs. Both readers are reading the *same row*, so one object describing it is
+ * the faithful arrangement rather than a convenience: the middleware takes `bot.workspaceId`
+ * and the CP3 chat turn takes `status`/`version` as its pre-flight gate and its
+ * optimistic-concurrency expectation. Without them the turn reads `undefined`, treats the
+ * conversation as human-owned, and silently bypasses the AI — which is the failure this
+ * comment exists to prevent someone reintroducing.
  */
 const arrange = (resolution: unknown, user = USER) => {
-  prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+  prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID }, status: 'ACTIVE', version: 1 });
   prismaMock.workspaceMember.findUnique.mockResolvedValue({
     id: 'member-1',
     userId: user.id,
@@ -100,6 +121,22 @@ const send = (user = USER, body: Record<string, unknown> = { content: 'Hello?' }
 /** The payload `aiServiceClient.chat` was called with, on its most recent call. */
 const lastChatPayload = () => aiMock.chat.mock.calls.at(-1)?.[0] as Record<string, unknown>;
 
+/**
+ * The `conversation.update` calls that changed the lifecycle, as opposed to the two writes
+ * every successful turn now makes for reasons unrelated to escalation:
+ *
+ *   - the per-message `updatedAt` touch (§9.3 Phase 1), and
+ *   - the OCC version bump that closes Phase 3 (§9.2).
+ *
+ * Asserting on the *status* is what these tests have always meant by "escalated" — stating it
+ * this way keeps that meaning while surviving the two bookkeeping writes CP3 added, which
+ * would otherwise make `not.toHaveBeenCalled()` fail for every non-escalating turn.
+ */
+const statusTransitions = () =>
+  prismaMock.conversation.update.mock.calls.filter(
+    ([args]) => (args as { data: Record<string, unknown> }).data.status !== undefined
+  );
+
 beforeEach(() => {
   vi.clearAllMocks();
   aiMock.chat.mockResolvedValue({
@@ -126,7 +163,7 @@ describe('a bot with an assigned, enabled model', () => {
       model_id: 'openai/gpt-4o-mini',
     });
     expect(res.body.data.ai.fallback_required).toBe(false);
-    expect(prismaMock.conversation.update).not.toHaveBeenCalled();
+    expect(statusTransitions()).toHaveLength(0);
   });
 
   it('reads the descriptor from the database, never from the request body', async () => {
@@ -167,7 +204,10 @@ describe('a bot with no model assigned', () => {
 
     expect(res.status).toBe(201);
     expect(aiMock.chat).toHaveBeenCalledTimes(1);
-    expect(aiMock.chat).toHaveBeenCalledWith(
+    // `chat` now takes a second argument — the Phase 2 `AbortSignal` (§9.2) — so the payload
+    // is asserted through the call's first slot rather than through `toHaveBeenCalledWith`,
+    // which would require the *whole* argument list to match.
+    expect(lastChatPayload()).toEqual(
       expect.objectContaining({
         bot_id: BOT_ID,
         message: 'Hello?',
@@ -187,7 +227,7 @@ describe('a bot with no model assigned', () => {
 
     expect(res.body.data.ai.fallback_required).toBe(false);
     expect(res.body.data.ai.reason).toBeUndefined();
-    expect(prismaMock.conversation.update).not.toHaveBeenCalled();
+    expect(statusTransitions()).toHaveLength(0);
   });
 });
 
@@ -222,12 +262,15 @@ describe('an unusable assigned model short-circuits before the AI call', () => {
 
     const res = await send();
 
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
+    expect(statusTransitions()).toHaveLength(1);
     expect(prismaMock.conversation.update).toHaveBeenCalledWith({
       where: { id: CONVERSATION_ID },
       // Checkpoint 5 adds the escalation metadata alongside the status.
       data: expect.objectContaining({ status: 'WAITING_FOR_HUMAN' }),
     });
+    // Phase 3's version bump and Phase 1's `updatedAt` touch are the turn's other two writes;
+    // neither carries a status, so exactly one transition landed.
+    expect(statusTransitions()).toHaveLength(1);
 
     // Both messages are persisted: the customer gets a reply, not an error, and the
     // transcript shows what they asked.
@@ -301,7 +344,7 @@ describe('a reason from the AI service', () => {
     // to report, and Node must not rewrite it.
     expect(res.body.data.ai.reason).toBe(AI_FAILURE_REASON.MODEL_RATE_LIMITED);
     expect(res.body.data.ai.fallback_required).toBe(true);
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
+    expect(statusTransitions()).toHaveLength(1);
   });
 
   it('a MODEL_ERROR from Python escalates the same way as a configuration fault', async () => {
@@ -321,6 +364,7 @@ describe('a reason from the AI service', () => {
       where: { id: CONVERSATION_ID },
       data: expect.objectContaining({ status: 'WAITING_FOR_HUMAN' }),
     });
+    expect(statusTransitions()).toHaveLength(1);
   });
 });
 
@@ -330,7 +374,7 @@ describe('a reason from the AI service', () => {
 
 describe('catalog state is read per request', () => {
   it('a disable between two messages takes effect on the next message, with no restart', async () => {
-    prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+    prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID }, status: 'ACTIVE', version: 1 });
     prismaMock.workspaceMember.findUnique.mockResolvedValue({
       id: 'member-1',
       userId: USER.id,
@@ -376,7 +420,7 @@ describe('catalog state is read per request', () => {
   });
 
   it('a re-enable is equally immediate', async () => {
-    prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+    prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID }, status: 'ACTIVE', version: 1 });
     prismaMock.workspaceMember.findUnique.mockResolvedValue({
       id: 'member-1',
       userId: USER.id,
@@ -420,7 +464,7 @@ describe('catalog state is read per request', () => {
 
 describe('the resolver does not weaken existing authorization', () => {
   it('a non-member gets 404 and is never told whether the model is usable', async () => {
-    prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+    prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID }, status: 'ACTIVE', version: 1 });
     prismaMock.workspaceMember.findUnique.mockResolvedValue(null);
 
     const res = await send(OTHER_USER);

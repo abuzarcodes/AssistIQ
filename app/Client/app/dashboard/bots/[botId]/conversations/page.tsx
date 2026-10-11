@@ -165,18 +165,22 @@ export default function ConversationsPage() {
     try {
       const res = await sendMessage(activeConvId, content);
 
-      const assistant: Message = {
-        ...res.assistantMessage,
-        sources: res.assistantMessage.sources ?? res.sources ?? null,
-      };
+      setMessages((prev) => {
+        const next = [
+          ...prev.filter((m) => m.id !== tempId),
+          res.userMessage,
+        ];
+        if (res.assistantMessage) {
+          const assistant: Message = {
+            ...res.assistantMessage,
+            sources: res.assistantMessage.sources ?? res.sources ?? null,
+          };
+          next.push(assistant);
+        }
+        return next;
+      });
 
-      setMessages((prev) => [
-        ...prev.filter((m) => m.id !== tempId),
-        res.userMessage,
-        assistant,
-      ]);
-
-      if (res.ai.fallback_required || res.escalation?.required) {
+      if (res.ai?.fallback_required || res.escalation?.required) {
         setConvStatus('WAITING_FOR_HUMAN');
       }
       if (res.escalation) {
@@ -303,6 +307,12 @@ export default function ConversationsPage() {
                           title="Waiting for human"
                         />
                       )}
+                      {conv.status === 'HUMAN_ACTIVE' && (
+                        <span
+                          className="w-2 h-2 rounded-full bg-accent flex-shrink-0"
+                          title="Human agent active"
+                        />
+                      )}
                     </div>
                     <span className="text-xs text-muted-foreground block truncate">
                       ID: {conv.id.substring(0, 8)}...
@@ -331,6 +341,9 @@ export default function ConversationsPage() {
                   <span className="text-sm font-medium text-foreground">Chat Interface</span>
                   {convStatus === 'WAITING_FOR_HUMAN' && (
                     <Badge variant="danger" dot>WAITING FOR HUMAN</Badge>
+                  )}
+                  {convStatus === 'HUMAN_ACTIVE' && (
+                    <Badge variant="info" dot>AGENT ACTIVE</Badge>
                   )}
                 </div>
               </div>
@@ -452,14 +465,16 @@ export default function ConversationsPage() {
                     placeholder={
                       convStatus === 'WAITING_FOR_HUMAN'
                         ? 'Waiting for human agent to reply...'
-                        : config?.conversation.inputPlaceholder ?? 'Type a message...'
+                        : convStatus === 'HUMAN_ACTIVE'
+                          ? 'Type a message to the agent...'
+                          : config?.conversation.inputPlaceholder ?? 'Type a message...'
                     }
-                    disabled={sending || convStatus === 'WAITING_FOR_HUMAN'}
+                    disabled={sending}
                     className="flex-1 h-10 rounded-full border border-border bg-background px-4 text-sm focus:outline-none focus:border-accent disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <Button
                     type="submit"
-                    disabled={!input.trim() || sending || convStatus === 'WAITING_FOR_HUMAN'}
+                    disabled={!input.trim() || sending}
                     className="rounded-full h-10 w-10 p-0 shrink-0"
                   >
                     <Send className="h-4 w-4 ml-0.5" />

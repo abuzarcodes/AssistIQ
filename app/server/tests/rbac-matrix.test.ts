@@ -72,7 +72,7 @@ const prismaMock = vi.hoisted(() => ({
     update: vi.fn(),
     count: vi.fn(),
   },
-  message: { create: vi.fn(), findFirst: vi.fn() },
+  message: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
   // Feedback and contact (Checkpoint 5). Declared here so the "a denied request writes
   // nothing" invariant covers the new conversational writes too.
   messageFeedback: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
@@ -121,6 +121,16 @@ const prismaMock = vi.hoisted(() => ({
     update: vi.fn(),
     delete: vi.fn(),
   },
+  conversationEvent: {
+    create: vi.fn(),
+    findMany: vi.fn(),
+  },
+  $transaction: vi.fn(async (cbOrArr) => {
+    if (typeof cbOrArr === 'function') {
+      return cbOrArr(prismaMock);
+    }
+    return Promise.all(cbOrArr);
+  }),
 }));
 
 // The AI boundary is mocked: this suite is about authorization, and no Python service
@@ -271,6 +281,7 @@ const writeMocks = (): ReturnType<typeof vi.fn>[] => [
   prismaMock.messageFeedback.upsert,
   prismaMock.messageFeedback.delete,
   prismaMock.conversationContact.upsert,
+  prismaMock.conversationEvent.create,
 ];
 
 const expectNoWrites = (): void => {
@@ -717,6 +728,32 @@ describe('conversation routes', () => {
     { label: 'AGENT replies to a conversation (conversations:reply)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'AGENT', expect: 201, body: { content: 'On it.' }, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID }); prismaMock.message.create.mockResolvedValue({ id: 'msg', conversationId: CONVERSATION_ID, role: 'USER', content: 'On it.', createdAt: new Date() }); aiMock.chat.mockResolvedValue({ status: 'success', response: 'Hello!', fallback_required: false }); } },
     { label: 'ADMIN replies to a conversation', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'ADMIN', expect: 201, body: { content: 'On it.' }, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID }); prismaMock.message.create.mockResolvedValue({ id: 'msg', conversationId: CONVERSATION_ID, role: 'USER', content: 'On it.', createdAt: new Date() }); aiMock.chat.mockResolvedValue({ status: 'success', response: 'Hello!', fallback_required: false }); } },
     { label: 'a non-member replying gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'NON_MEMBER', expect: 404, body: { content: 'Let me in.' } },
+
+    // CP2/CP3 support queue & lifecycle routes
+    { label: 'AGENT reads workspace queue (conversations:view)', method: 'get', path: `/api/v1/workspaces/${WORKSPACE_ID}/conversations/queue`, as: 'AGENT', expect: 200, prime: () => { prismaMock.conversation.findMany.mockResolvedValue([]); } },
+    { label: 'a non-member reading workspace queue gets 404', method: 'get', path: `/api/v1/workspaces/${WORKSPACE_ID}/conversations/queue`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT reads conversation events (conversations:view)', method: 'get', path: `/api/v1/conversations/${CONVERSATION_ID}/events`, as: 'AGENT', expect: 200, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, status: 'HUMAN_ACTIVE', assignedAgentId: USER.id, escalatedAt: new Date(), workspaceId: WORKSPACE_ID }); prismaMock.conversationEvent.findMany.mockResolvedValue([]); } },
+    { label: 'a non-member reading conversation events gets 404', method: 'get', path: `/api/v1/conversations/${CONVERSATION_ID}/events`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT reads message cursor (conversations:view)', method: 'get', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'AGENT', expect: 200, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, status: 'HUMAN_ACTIVE', assignedAgentId: USER.id, escalatedAt: new Date(), workspaceId: WORKSPACE_ID }); prismaMock.message.findMany.mockResolvedValue([]); } },
+    { label: 'a non-member reading message cursor gets 404', method: 'get', path: `/api/v1/conversations/${CONVERSATION_ID}/messages`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT claims conversation (conversations:claim)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/claim`, as: 'AGENT', expect: 200, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, status: 'WAITING_FOR_HUMAN', assignedAgentId: null, escalatedAt: new Date(), workspaceId: WORKSPACE_ID }); prismaMock.conversation.update.mockResolvedValue({ id: CONVERSATION_ID, status: 'HUMAN_ACTIVE', assignedAgentId: USER.id, version: 2, workspaceId: WORKSPACE_ID }); prismaMock.conversationEvent.create.mockResolvedValue({ id: 'evt-claim' }); } },
+    { label: 'a non-member claiming conversation gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/claim`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'ADMIN assigns conversation (conversations:assign)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/assign`, as: 'ADMIN', expect: 200, body: { agentId: USER.id }, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, status: 'WAITING_FOR_HUMAN', assignedAgentId: null, escalatedAt: new Date(), workspaceId: WORKSPACE_ID }); prismaMock.conversation.update.mockResolvedValue({ id: CONVERSATION_ID, status: 'HUMAN_ACTIVE', assignedAgentId: USER.id, version: 2, workspaceId: WORKSPACE_ID }); prismaMock.conversationEvent.create.mockResolvedValue({ id: 'evt-assign' }); } },
+    { label: 'AGENT cannot assign conversation (conversations:assign is ADMIN/OWNER only) → 403', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/assign`, as: 'AGENT', expect: 403, body: { agentId: USER.id } },
+    { label: 'a non-member assigning conversation gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/assign`, as: 'NON_MEMBER', expect: 404, body: { agentId: USER.id } },
+
+    { label: 'AGENT resolves conversation (conversations:resolve)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/resolve`, as: 'AGENT', expect: 200, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, status: 'HUMAN_ACTIVE', assignedAgentId: USER.id, escalatedAt: new Date(), workspaceId: WORKSPACE_ID }); prismaMock.conversation.update.mockResolvedValue({ id: CONVERSATION_ID, status: 'RESOLVED', assignedAgentId: USER.id, version: 2, workspaceId: WORKSPACE_ID, resolvedAt: new Date() }); prismaMock.conversationEvent.create.mockResolvedValue({ id: 'evt-resolve' }); } },
+    { label: 'a non-member resolving conversation gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/resolve`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT reopens conversation (conversations:resolve)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/reopen`, as: 'AGENT', expect: 200, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, status: 'RESOLVED', assignedAgentId: null, escalatedAt: new Date(), workspaceId: WORKSPACE_ID }); prismaMock.conversation.update.mockResolvedValue({ id: CONVERSATION_ID, status: 'ACTIVE', assignedAgentId: null, version: 2, workspaceId: WORKSPACE_ID, resolvedAt: null }); prismaMock.conversationEvent.create.mockResolvedValue({ id: 'evt-reopen' }); } },
+    { label: 'a non-member reopening conversation gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/reopen`, as: 'NON_MEMBER', expect: 404 },
+
+    { label: 'AGENT sends human reply (conversations:reply)', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/reply`, as: 'AGENT', expect: 201, body: { content: 'Human agent here.' }, prime: () => { prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, status: 'HUMAN_ACTIVE', assignedAgentId: USER.id, escalatedAt: new Date(), workspaceId: WORKSPACE_ID }); prismaMock.message.create.mockResolvedValue({ id: 'msg-agent', conversationId: CONVERSATION_ID, role: 'AGENT', content: 'Human agent here.', createdAt: new Date() }); prismaMock.conversationEvent.create.mockResolvedValue({ id: 'evt-reply' }); prismaMock.conversation.update.mockResolvedValue({ id: CONVERSATION_ID }); } },
+    { label: 'a non-member sending human reply gets 404', method: 'post', path: `/api/v1/conversations/${CONVERSATION_ID}/reply`, as: 'NON_MEMBER', expect: 404, body: { content: 'Human agent here.' } },
   ];
 
   it.each(cases)('$label', expectCase);

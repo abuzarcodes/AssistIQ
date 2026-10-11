@@ -6,6 +6,7 @@ import { createWorkspaceSchema, workspaceIdParamSchema } from '../schemas/worksp
 import * as workspaceController from '../controllers/workspace.controller.js';
 import { botCreateListRouter } from './bot.routes.js';
 import { workspaceMemberRouter } from './workspaceMember.routes.js';
+import { workspaceConversationRouter } from './conversation.routes.js';
 
 const router = Router();
 
@@ -26,5 +27,9 @@ router.use('/:workspaceId/members', workspaceMemberRouter);
 
 // Bots are created and listed within the context of a workspace.
 router.use('/:workspaceId/bots', botCreateListRouter);
+
+// The workspace-wide support queue (§14). Cross-bot by design — an agent works a queue,
+// not a bot.
+router.use('/:workspaceId/conversations', workspaceConversationRouter);
 
 export default router;

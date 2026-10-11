@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Plus, Bot as BotIcon, ArrowRight } from 'lucide-react';
+import { ArrowLeft, Plus, Bot as BotIcon, ArrowRight, Inbox } from 'lucide-react';
 import { getWorkspace, type Workspace } from '@/lib/api/workspaces';
 import { listBots, createBot, type Bot } from '@/lib/api/bots';
 import { Card, CardBody } from '@/components/ui/card';
@@ -101,11 +101,20 @@ export default function WorkspaceDetailPage() {
             Manage bots in this workspace.
           </p>
         </div>
-        <Button size="sm" onClick={() => setDialogOpen(true)}>
-          <Plus className="h-3.5 w-3.5" />
-          New Bot
-        </Button>
+        <div className="flex items-center gap-2">
+          <Link href={`/dashboard/workspaces/${params.workspaceId}/inbox`}>
+            <Button size="sm" variant="secondary">
+              <Inbox className="h-3.5 w-3.5" />
+              Support Inbox
+            </Button>
+          </Link>
+          <Button size="sm" onClick={() => setDialogOpen(true)}>
+            <Plus className="h-3.5 w-3.5" />
+            New Bot
+          </Button>
+        </div>
       </div>
+
 
       {bots.length === 0 ? (
         <EmptyState

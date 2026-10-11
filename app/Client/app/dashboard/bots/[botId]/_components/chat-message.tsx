@@ -4,10 +4,10 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ChevronDown, ThumbsDown, ThumbsUp } from 'lucide-react';
-import type { MessageFeedback, SourceRef } from '@/lib/api/conversations';
+import type { MessageFeedback, MessageRole, SourceRef } from '@/lib/api/conversations';
 
 interface ChatMessageProps {
-  role: 'USER' | 'ASSISTANT' | 'SYSTEM';
+  role: MessageRole;
   content: string;
   /** Citations, present only when the bot shows sources and the turn produced an answer. */
   sources?: SourceRef[] | null;
@@ -38,11 +38,18 @@ export function ChatMessage({
 
   return (
     <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+      {role === 'AGENT' && (
+        <span className="text-[11px] font-medium text-accent mb-1 ml-1">
+          Support Specialist
+        </span>
+      )}
       <div
         className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm ${
           isUser
             ? 'bg-accent text-accent-foreground rounded-tr-sm'
-            : 'bg-muted text-foreground rounded-tl-sm'
+            : role === 'AGENT'
+              ? 'bg-accent/15 text-foreground rounded-tl-sm border border-accent/20'
+              : 'bg-muted text-foreground rounded-tl-sm'
         }`}
       >
         <div

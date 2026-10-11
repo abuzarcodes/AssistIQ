@@ -12,11 +12,14 @@ datasource db {
 }
 
 /// Roles a chat message can take. The Python AI service will only ever produce ASSISTANT
-/// messages; SYSTEM is reserved for future prompt/handoff bookkeeping.
+/// messages; SYSTEM is reserved for future prompt/handoff bookkeeping. AGENT is authored
+/// by a human support agent through the dashboard (see HUMAN_ESCALATION_IMPLEMENTATION_PLAN.md)
+/// and is never produced by the AI pipeline.
 enum MessageRole {
   USER
   ASSISTANT
   SYSTEM
+  AGENT
 }
 
 /// Platform-level (global, application-wide) authorization role. Deliberately separate
@@ -48,6 +51,12 @@ model User {
   // RBAC: explicit per-workspace membership (added alongside `ownerId` during transition).
   memberships WorkspaceMember[]
 
+  // Human support: the conversations this user currently owns, the transitions they
+  // caused, and the agent messages they authored.
+  assignedConversations Conversation[]      @relation("AssignedConversations")
+  conversationEvents    ConversationEvent[]
+  authoredMessages      Message[]           @relation("AuthoredMessages")
+
   @@map("users")
 }
 
@@ -75,9 +84,10 @@ model Workspace {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  owner   User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  bots    Bot[]
-  members WorkspaceMember[]
+  owner         User              @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  bots          Bot[]
+  members       WorkspaceMember[]
+  conversations Conversation[]
 
   @@index([ownerId])
   @@map("workspaces")
@@ -142,55 +152,145 @@ model KnowledgeEntry {
   @@map("knowledge_entries")
 }
 
+/// A conversation's authoritative lifecycle state. Exactly one value is authoritative at a
+/// time, and every transition is audited through `ConversationEvent`.
+///
+/// - `ACTIVE`           — handled exclusively by the AI bot; no assigned agent.
+/// - `WAITING_FOR_HUMAN`— escalated, sitting in the workspace queue; no assigned agent.
+/// - `HUMAN_ACTIVE`     — a support agent owns it; `assignedAgentId` is REQUIRED non-null.
+/// - `RESOLVED`         — closed by an agent; read-only until reopened.
+///
+/// Invariant: `HUMAN_ACTIVE` without an assigned agent is an illegal state, and
+/// `ACTIVE`/`WAITING_FOR_HUMAN` must never carry an assigned agent.
 enum ConversationStatus {
   ACTIVE
   WAITING_FOR_HUMAN
+  HUMAN_ACTIVE
   RESOLVED
 }
 
+/// Durable audit trail of conversation lifecycle transitions. Written in the SAME
+/// transaction as the state change it records, so a transition without its audit row
+/// (or an audit row without its transition) is impossible.
+enum ConversationEventType {
+  ESCALATED
+  CLAIMED
+  ASSIGNED
+  REASSIGNED
+  UNASSIGNED
+  AGENT_REPLIED
+  RESOLVED
+  REOPENED
+}
+
 model Conversation {
-  id                String             @id @default(uuid())
-  botId             String
-  status            ConversationStatus @default(ACTIVE)
-  assignedAgentId   String?
+  id                 String             @id @default(uuid())
+  botId              String
+  /// Denormalised from `Bot.workspaceId` at creation. Deliberately duplicated: every
+  /// tenant-isolation check and every queue query filters on workspace before anything
+  /// else, and deriving it through `bot` on each request would turn a single indexed
+  /// predicate into a join. The two are written together and never diverge.
+  workspaceId        String
+  status             ConversationStatus @default(ACTIVE)
+  /// The single support agent who owns this conversation. Non-null exactly when
+  /// `status = HUMAN_ACTIVE`; cleared on unassign, resolve-to-queue, reopen-to-AI and
+  /// membership revocation. `SetNull` so deleting a user can never orphan a ticket.
+  assignedAgentId    String?
   /// When the conversation last escalated to a human (BOT_IMPLEMENTATION_PLAN.md §9.3).
-  /// Null means it never has. Kept as columns rather than a table: there is no queue,
-  /// no assignment flow and no history — three fields do not justify normalisation.
-  escalatedAt       DateTime?
+  /// Null means it never has.
+  escalatedAt        DateTime?
   /// The reason code that triggered the escalation (e.g. "LLM_INSUFFICIENT_INFORMATION").
-  escalationReason  String?            @db.VarChar(64)
+  escalationReason   String?            @db.VarChar(64)
   /// Whether the escalation happened outside the bot's configured business hours.
-  escalatedOffHours Boolean?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+  escalatedOffHours  Boolean?
+  /// When an agent closed the conversation. Cleared on reopen.
+  resolvedAt         DateTime?
+  /// Optimistic-concurrency token. Bumped on every lifecycle transition and on every
+  /// message that changes what the AI is allowed to answer. Lets an in-flight AI turn
+  /// detect that the conversation moved underneath it and discard its own stale reply
+  /// instead of writing a bot message after a human took over.
+  version            Int                @default(1)
+  /// SHA-256 hex of the visitor's rotating refresh secret. The plaintext secret is only
+  /// ever returned once, at conversation creation; this column is what `/refresh` checks.
+  /// Null for conversations that have no public visitor session (e.g. dashboard-created).
+  visitorSessionHash String?            @db.VarChar(64)
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
 
   bot              Bot                  @relation(fields: [botId], references: [id], onDelete: Cascade)
+  workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  assignedAgent    User?                @relation("AssignedConversations", fields: [assignedAgentId], references: [id], onDelete: SetNull)
   messages         Message[]
   /// Contact details a customer supplied for this conversation (§14.6). Deliberately not
   /// a Customer entity — AssistIQ has no end-user identity system.
   contact          ConversationContact?
   messageFeedbacks MessageFeedback[]
+  events           ConversationEvent[]
 
   @@index([botId])
+  /// Serves the queue views, which always scope by workspace and filter by status.
+  @@index([workspaceId, status])
+  /// Serves "my assigned" and the unassigned-queue predicate.
+  @@index([status, assignedAgentId])
   @@map("conversations")
 }
 
 model Message {
-  id             String      @id @default(uuid())
-  conversationId String
-  role           MessageRole
-  content        String
+  id              String      @id @default(uuid())
+  conversationId  String
+  role            MessageRole
+  content         String
+  /// The human support agent who authored an AGENT message. Null for every other role
+  /// (AI, customer and system messages have no AssistIQ user behind them). `SetNull`
+  /// keeps the transcript intact if the author's account is later deleted.
+  senderId        String?
+  /// Client-generated idempotency key (a uuid the widget mints before sending). Echoed
+  /// back on the broadcast so the sender can reconcile its optimistic bubble with the
+  /// committed row instead of rendering the message twice. Not a uniqueness constraint:
+  /// it is scoped to one client's session, not to the table.
+  clientMessageId String?     @db.VarChar(64)
   /// Source references for an ASSISTANT message when the bot shows knowledge sources
   /// (§15.3): `[{ chunkId, sourceId, topic, pageNumber }]`. Null when sources are off,
   /// which is the default — so the default path writes no new data.
-  sources        Json?
-  createdAt      DateTime    @default(now())
+  sources         Json?
+  createdAt       DateTime    @default(now())
 
   conversation Conversation     @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User?            @relation("AuthoredMessages", fields: [senderId], references: [id], onDelete: SetNull)
   feedback     MessageFeedback?
 
-  @@index([conversationId])
+  /// Ordered-transcript read path and the `(createdAt, id)` recovery cursor both use
+  /// this composite: `id` breaks ties so two messages in the same millisecond still have
+  /// a total order.
+  @@index([conversationId, createdAt, id])
+  @@index([senderId])
   @@map("messages")
+}
+
+/// Durable audit trail of one conversation lifecycle transition.
+///
+/// Written inside the same transaction as the transition itself (§12.1), which is what
+/// makes "state changed but nothing recorded it" impossible. This is the permanent
+/// record; realtime socket events are only a low-latency echo of it and may be missed.
+model ConversationEvent {
+  id             String                @id @default(uuid())
+  conversationId String
+  /// The user who caused the transition, or null when the system or the customer did
+  /// (escalation, and customer-driven reopen).
+  actorId        String?
+  eventType      ConversationEventType
+  /// Structured detail for the transition — e.g. `{ reason, offHours }` for ESCALATED,
+  /// `{ previousAgentId, targetAgentId }` for REASSIGNED, `{ actor: "CUSTOMER" }` for a
+  /// customer-driven REOPENED.
+  metadata       Json?
+  createdAt      DateTime              @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  actor        User?        @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([conversationId, createdAt])
+  @@index([actorId])
+  @@map("conversation_events")
 }
 
 /// A provider of chat models. Rows are seeded/migrated — NOT created through the API,

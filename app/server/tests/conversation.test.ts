@@ -47,6 +47,10 @@ const prismaMock = vi.hoisted(() => ({
     delete: vi.fn(),
   },
   conversationContact: { upsert: vi.fn() },
+  // CP3: the chat turn commits the assistant message and any escalation in one interactive
+  // transaction, so the message path now touches the audit table and `$transaction`.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
+  $transaction: vi.fn(),
 }));
 
 // The AI boundary is mocked so no Python service is required (spec §15, §24).
@@ -54,6 +58,13 @@ const aiMock = vi.hoisted(() => ({ chat: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+// Assigned once, because `vi.clearAllMocks()` clears calls rather than implementations.
+// An interactive transaction hands the callback the same delegate surface as the root
+// client, which is exactly what `fn(prismaMock)` reproduces.
+prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) =>
+  fn(prismaMock)
+);
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -90,8 +101,21 @@ const botHasNoModel = () =>
     fallbackAiModel: null,
   });
 
+/**
+ * The conversation row, as both readers of it see it.
+ *
+ * `bot.workspaceId` answers the permission middleware's scope resolution; `status` and
+ * `version` answer the CP3 chat turn's pre-flight gate and its optimistic-concurrency
+ * expectation. They are primed together because they describe one row — and because a turn
+ * that reads `undefined` for `status` bypasses the AI and silently turns every assertion
+ * about `aiMock.chat` below into a tautology.
+ */
 const conversationBelongsToWorkspace = () =>
-  prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+  prismaMock.conversation.findUnique.mockResolvedValue({
+    bot: { workspaceId: WORKSPACE_ID },
+    status: 'ACTIVE',
+    version: 1,
+  });
 
 const membership = (userId: string, role: 'OWNER' | 'ADMIN' | 'AGENT') =>
   prismaMock.workspaceMember.findUnique.mockResolvedValue({
@@ -102,6 +126,19 @@ const membership = (userId: string, role: 'OWNER' | 'ADMIN' | 'AGENT') =>
     createdAt: new Date(),
     updatedAt: new Date(),
   });
+
+/**
+ * The `conversation.update` calls that changed the lifecycle.
+ *
+ * A successful CP3 turn writes the conversation three times for two different reasons: the
+ * per-message `updatedAt` touch (§9.3 Phase 1) and the OCC version bump that closes Phase 3
+ * (§9.2) are bookkeeping; only an escalation carries a `status`. Filtering on the status
+ * keeps "the turn escalated" as the thing being asserted, which is what these tests mean.
+ */
+const statusTransitions = () =>
+  prismaMock.conversation.update.mock.calls.filter(
+    ([args]) => (args as { data: Record<string, unknown> }).data.status !== undefined
+  );
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -133,7 +170,11 @@ describe('POST /api/v1/bots/:botId/conversations', () => {
 
     expect(res.status).toBe(201);
     expect(res.body.data.id).toBe(CONVERSATION_ID);
-    expect(prismaMock.conversation.create).toHaveBeenCalledWith({ data: { botId: BOT_ID } });
+    // CP1: the conversation now carries a denormalised workspaceId, taken from the bot,
+    // so queue and tenant queries never have to join through `bot`.
+    expect(prismaMock.conversation.create).toHaveBeenCalledWith({
+      data: { botId: BOT_ID, workspaceId: WORKSPACE_ID },
+    });
   });
 });
 
@@ -177,7 +218,10 @@ describe('POST /api/v1/conversations/:conversationId/messages', () => {
 
     // The AI service was reached through the boundary with the message + bot context.
     expect(aiMock.chat).toHaveBeenCalledTimes(1);
-    expect(aiMock.chat).toHaveBeenCalledWith(
+    // Asserted through the call's first slot: `chat` now takes a second argument — the Phase 2
+    // `AbortSignal` (§9.2) — and `toHaveBeenCalledWith` would require the whole argument list
+    // to match.
+    expect(aiMock.chat.mock.calls[0][0]).toEqual(
       expect.objectContaining({
         bot_id: BOT_ID,
         message: 'What are your hours?',
@@ -302,8 +346,13 @@ describe('Checkpoint 7 — agent conversation foundation', () => {
     // asking for a human, and Node short-circuiting on an unusable model. Without this the
     // test would pass on either, and would no longer be about the AI service's answer.
     expect(aiMock.chat).toHaveBeenCalledTimes(1);
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
-    const { data } = prismaMock.conversation.update.mock.calls[0][0] as {
+    // Asserted through the transitions rather than through every `conversation.update` call:
+    // CP3 added two bookkeeping writes to a successful turn (§9.3 Phase 1's `updatedAt` touch
+    // and §9.2 Phase 3's version bump), and neither carries a status. The claim here is that
+    // exactly one *status* transition landed.
+    const transitions = statusTransitions();
+    expect(transitions).toHaveLength(1);
+    const { data } = transitions[0][0] as {
       data: Record<string, unknown>;
     };
     // The status transition plus the escalation metadata added in Checkpoint 5 — assignment

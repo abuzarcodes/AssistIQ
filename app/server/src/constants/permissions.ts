@@ -26,6 +26,14 @@ export const PERMISSIONS = {
 
   CONVERSATIONS_VIEW: 'conversations:view',
   CONVERSATIONS_REPLY: 'conversations:reply',
+  /**
+   * Take an unassigned conversation out of the queue, or put your own back into it.
+   *
+   * Deliberately separate from `CONVERSATIONS_REPLY`: claiming is a lifecycle transition
+   * (it changes who owns the ticket and takes the AI out of the loop), not a message.
+   * Overloading reply would mean any role that can type a message can also seize a ticket.
+   */
+  CONVERSATIONS_CLAIM: 'conversations:claim',
   CONVERSATIONS_ASSIGN: 'conversations:assign',
   CONVERSATIONS_RESOLVE: 'conversations:resolve',
   CONVERSATIONS_MANAGE: 'conversations:manage',
@@ -64,6 +72,7 @@ export const WORKSPACE_ROLE_PERMISSIONS: Record<WorkspaceRole, ReadonlySet<Permi
     PERMISSIONS.DOCUMENTS_MANAGE,
     PERMISSIONS.CONVERSATIONS_VIEW,
     PERMISSIONS.CONVERSATIONS_REPLY,
+    PERMISSIONS.CONVERSATIONS_CLAIM,
     PERMISSIONS.CONVERSATIONS_ASSIGN,
     PERMISSIONS.CONVERSATIONS_RESOLVE,
     PERMISSIONS.CONVERSATIONS_MANAGE,
@@ -84,6 +93,7 @@ export const WORKSPACE_ROLE_PERMISSIONS: Record<WorkspaceRole, ReadonlySet<Permi
     PERMISSIONS.DOCUMENTS_MANAGE,
     PERMISSIONS.CONVERSATIONS_VIEW,
     PERMISSIONS.CONVERSATIONS_REPLY,
+    PERMISSIONS.CONVERSATIONS_CLAIM,
     PERMISSIONS.CONVERSATIONS_ASSIGN,
     PERMISSIONS.CONVERSATIONS_RESOLVE,
     PERMISSIONS.CONVERSATIONS_MANAGE,
@@ -91,12 +101,16 @@ export const WORKSPACE_ROLE_PERMISSIONS: Record<WorkspaceRole, ReadonlySet<Permi
   ]),
 
   // Customer support. Read-only context + reply/resolve; cannot assign or manage.
+  // `CONVERSATIONS_CLAIM` is granted: handling your own queue is the job. Assigning is not
+  // — an AGENT can take a ticket and hand back their own, but can never move work onto
+  // another person, which is what `CONVERSATIONS_ASSIGN` (ADMIN/OWNER only) gates.
   AGENT: new Set<Permission>([
     PERMISSIONS.WORKSPACE_VIEW,
     PERMISSIONS.KNOWLEDGE_VIEW,
     PERMISSIONS.DOCUMENTS_VIEW,
     PERMISSIONS.CONVERSATIONS_VIEW,
     PERMISSIONS.CONVERSATIONS_REPLY,
+    PERMISSIONS.CONVERSATIONS_CLAIM,
     PERMISSIONS.CONVERSATIONS_RESOLVE,
     PERMISSIONS.AI_USE,
   ]),

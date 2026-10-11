@@ -14,21 +14,19 @@ import type { ConversationContactInput } from '../schemas/botConfig.schema.js';
  */
 
 /**
- * Validate and upsert the contact details for a conversation.
+ * Validate and write the contact details for a conversation.
  *
- * Scope is asserted through the conversation's bot membership (`assertConversationAccess`),
- * so a foreign conversation id is a 404 before any configuration is read. The order after
- * that is deliberate: config gate (409) → field membership (400) → required (400) → write,
- * so an owner who has not enabled collection gets an explicit "not enabled" rather than a
+ * Split out from the two entry points below so the validation rules exist once. The order is
+ * deliberate: config gate (409) → field membership (400) → required (400) → write, so an
+ * owner who has not enabled collection gets an explicit "not enabled" rather than a
  * validation error about fields that do not apply.
  */
-export const upsertContact = async (
+const writeContact = async (
   conversationId: string,
-  userId: string,
+  botId: string,
   input: ConversationContactInput
 ) => {
-  const conversation = await assertConversationAccess(conversationId, userId);
-  const config = await resolveBotConfigForChat(conversation.botId);
+  const config = await resolveBotConfigForChat(botId);
 
   const collection = config.humanSupport.contactCollection;
   if (!collection || !collection.enabled) {
@@ -64,3 +62,32 @@ export const upsertContact = async (
     update: data,
   });
 };
+
+/**
+ * Upsert contact details on behalf of a workspace member (spec §14).
+ *
+ * Scope is asserted through the conversation's bot membership (`assertConversationAccess`),
+ * so a foreign conversation id is a 404 before any configuration is read.
+ */
+export const upsertContact = async (
+  conversationId: string,
+  userId: string,
+  input: ConversationContactInput
+) => {
+  const conversation = await assertConversationAccess(conversationId, userId);
+  return writeContact(conversationId, conversation.botId, input);
+};
+
+/**
+ * Upsert contact details on behalf of the customer themselves (§14, CP3).
+ *
+ * No membership check, because there is no member: `authenticateVisitor` has already proven
+ * the visitor token names this conversation, and the `botId` comes from that middleware's
+ * re-read of the row rather than from the request. The visitor is only ever writing to their
+ * own conversation, which is why the same validation can be shared with the member path.
+ */
+export const upsertVisitorContact = async (
+  conversationId: string,
+  botId: string,
+  input: ConversationContactInput
+) => writeContact(conversationId, botId, input);

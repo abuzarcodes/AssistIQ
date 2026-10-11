@@ -34,3 +34,22 @@ export function getWorkspace(workspaceId: string) {
 export function createWorkspace(name: string) {
   return apiPost<Workspace>('/workspaces', { name });
 }
+
+export interface WorkspaceMemberInfo {
+  id: string;
+  workspaceId: string;
+  userId: string;
+  role: WorkspaceRole;
+  createdAt: string;
+  user: {
+    id: string;
+    name: string;
+    email: string;
+    platformRole: string;
+  };
+}
+
+export function listWorkspaceMembers(workspaceId: string) {
+  return apiGet<WorkspaceMemberInfo[]>(`/workspaces/${workspaceId}/members`);
+}
+

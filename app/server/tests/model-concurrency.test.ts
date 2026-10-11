@@ -28,12 +28,21 @@ const prismaMock = vi.hoisted(() => ({
   // Checkpoint 5: the message path resolves the bot configuration as well as its model.
   botConfiguration: { findUnique: vi.fn() },
   knowledgeSource: { findMany: vi.fn() },
+  // CP3: the chat turn commits the assistant message and any escalation in one interactive
+  // transaction, so the message path now touches the audit table and `$transaction`.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
+  $transaction: vi.fn(),
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn(), getAiStatus: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+// Assigned once, because `vi.clearAllMocks()` clears calls rather than implementations.
+prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) =>
+  fn(prismaMock)
+);
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -211,7 +220,14 @@ beforeEach(() => {
     }
   );
 
-  prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+  // One object for one row: `bot.workspaceId` for the middleware, `status`/`version` for the
+  // CP3 turn's gate and OCC expectation. A turn that read `undefined` for `status` would
+  // bypass the AI and make every `aiMock.chat` assertion in this file vacuous.
+  prismaMock.conversation.findUnique.mockResolvedValue({
+    bot: { workspaceId: WORKSPACE_ID },
+    status: 'ACTIVE',
+    version: 1,
+  });
   prismaMock.conversation.findFirst.mockResolvedValue({ id: CONV_A, botId: BOT_A });
   prismaMock.conversation.update.mockResolvedValue({ id: CONV_A, status: 'WAITING_FOR_HUMAN' });
   prismaMock.message.create.mockImplementation(async (args: { data: Record<string, unknown> }) => ({

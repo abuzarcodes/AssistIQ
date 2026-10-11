@@ -9,6 +9,7 @@ import knowledgeRoutes from './knowledge.routes.js';
 import knowledgeSourceRoutes from './knowledgeSource.routes.js';
 import knowledgeChunkRoutes from './knowledgeChunk.routes.js';
 import conversationRoutes from './conversation.routes.js';
+import publicConversationRoutes from './publicConversation.routes.js';
 import adminAiRoutes from './admin.ai.routes.js';
 import platformRoutes from './platform.routes.js';
 import aiCatalogRoutes from './aiCatalog.routes.js';
@@ -17,6 +18,13 @@ const router = Router();
 
 // Public authentication endpoints (self-rate-limited).
 router.use('/auth', authRoutes);
+
+// The public conversation surface (§10, §14) — the only bare mount outside `/auth`. Its
+// credential is the scoped visitor token, which names one conversation and one bot, so it
+// cannot be expressed as a workspace permission check and does not want to be: a customer
+// has no workspace. `authenticateVisitor` is applied per route inside the router, and the
+// router's own rate limiters cover the two public writes §18.4 names.
+router.use('/public', publicConversationRoutes);
 
 // Protected namespaces — `authenticate` runs once here and covers nested routers
 // (e.g. /workspaces/:workspaceId/bots, /bots/:botId/conversations). Fine-grained RBAC is

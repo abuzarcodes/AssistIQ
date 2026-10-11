@@ -44,3 +44,109 @@ export const verifyToken = (token: string): JwtPayload => {
     throw new AuthenticationError('Invalid or expired authentication token');
   }
 };
+
+// =======================================================================================
+// Visitor (customer) tokens — HUMAN_ESCALATION_IMPLEMENTATION_PLAN.md §10
+//
+// A second, deliberately weaker token family. The claims below are the whole security
+// model: a visitor token names exactly one conversation, and `authenticateVisitor` refuses
+// to let it name any other. It carries no `email`, which is also what makes it structurally
+// unusable on the agent routes — `verifyToken` above requires that claim, so a visitor
+// token presented to `/workspaces/*` or `/bots/*` fails there without any extra check.
+// =======================================================================================
+
+/**
+ * Visitor token lifetime (§10.3).
+ *
+ * Short by design, and deliberately **not** configurable: the long-lived credential is the
+ * 32-byte session secret in `localStorage`, and the 15-minute token exists precisely so a
+ * stolen `Authorization` header ages out fast. Making this an env var would invite an
+ * operator to widen the window §10.1 exists to close.
+ */
+const VISITOR_TOKEN_TTL = '15m';
+
+/** The claim set of a visitor token, out of `verifyVisitorToken` (§10.4). */
+export interface VisitorTokenPayload {
+  sub: string;
+  conversationId: string;
+  botId: string;
+  workspaceId: string;
+  role: 'CUSTOMER';
+}
+
+/**
+ * Sign a visitor token for one conversation.
+ *
+ * The conversation, bot and workspace are all carried so a request can be rejected by
+ * comparing claims alone, without a database round-trip on the happy path — but the
+ * middleware still re-reads the conversation, because a claim is only as good as the row
+ * it describes and the row can move (a conversation is scoped to a bot forever, but the
+ * comparison is what *proves* it rather than assumes it).
+ */
+export const signVisitorToken = (input: {
+  conversationId: string;
+  botId: string;
+  workspaceId: string;
+}): string =>
+  jwt.sign(
+    {
+      sub: `visitor:${input.conversationId}`,
+      conversationId: input.conversationId,
+      botId: input.botId,
+      workspaceId: input.workspaceId,
+      role: 'CUSTOMER',
+    },
+    env.JWT_SECRET,
+    { expiresIn: VISITOR_TOKEN_TTL as SignOptions['expiresIn'] }
+  );
+
+/**
+ * Verify and decode a visitor token.
+ *
+ * `ignoreExpiration` exists for exactly one caller — `POST /refresh` (§10.3), where an
+ * *expired* token is the expected input and the session secret, not the token, is the
+ * credential being checked. It is not a general-purpose escape hatch: the middleware only
+ * ever sets it on that one route, and a refresh that cannot produce the matching
+ * `visitorSessionHash` fails regardless of how valid the token's signature is.
+ */
+export const verifyVisitorToken = (
+  token: string,
+  options: { ignoreExpiration?: boolean } = {}
+): VisitorTokenPayload => {
+  try {
+    const decoded = jwt.verify(token, env.JWT_SECRET, {
+      ignoreExpiration: options.ignoreExpiration ?? false,
+    });
+
+    if (typeof decoded !== 'object' || decoded === null) {
+      throw new AuthenticationError('Invalid visitor token');
+    }
+
+    const raw = decoded as Record<string, unknown>;
+
+    // `role` is checked rather than assumed: without it a *member* token would satisfy the
+    // shape below if it ever gained these claims, and the two token families must never be
+    // interchangeable in either direction.
+    if (raw.role !== 'CUSTOMER') {
+      throw new AuthenticationError('Invalid visitor token');
+    }
+    if (
+      typeof raw.conversationId !== 'string' ||
+      typeof raw.botId !== 'string' ||
+      typeof raw.workspaceId !== 'string'
+    ) {
+      throw new AuthenticationError('Invalid visitor token');
+    }
+
+    return {
+      sub: `visitor:${raw.conversationId}`,
+      conversationId: raw.conversationId,
+      botId: raw.botId,
+      workspaceId: raw.workspaceId,
+      role: 'CUSTOMER',
+    };
+  } catch (error) {
+    if (error instanceof AuthenticationError) throw error;
+    throw new AuthenticationError('Invalid or expired visitor token');
+  }
+};

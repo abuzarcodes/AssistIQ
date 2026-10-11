@@ -42,7 +42,13 @@ const prismaMock = vi.hoisted(() => ({
     findUnique: vi.fn(),
     count: vi.fn(),
   },
+  // CP2: removing a member re-queues their conversations in the same transaction, so the
+  // member route now touches the audit table and runs an interactive transaction.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
   message: { create: vi.fn() },
+  // Interactive transactions receive the same delegate surface as the root client, which is
+  // exactly what `fn(prismaMock)` reproduces.
+  $transaction: vi.fn(),
 }));
 
 const aiMock = vi.hoisted(() => ({
@@ -52,6 +58,13 @@ const aiMock = vi.hoisted(() => ({
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+// Defaults that survive `vi.clearAllMocks()` (which clears calls, not implementations).
+// Assigned once here rather than per-test so a test only has to state what it cares about.
+prismaMock.$transaction.mockImplementation(
+  (fn: (tx: unknown) => Promise<unknown>) => fn(prismaMock)
+);
+prismaMock.conversation.findMany.mockResolvedValue([]);
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');

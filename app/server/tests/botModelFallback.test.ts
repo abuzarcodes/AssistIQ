@@ -26,16 +26,28 @@ const prismaMock = vi.hoisted(() => ({
   bot: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   aIModel: { findUnique: vi.fn() },
   conversation: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
+  // CP3: the chat turn commits the assistant message and any escalation in one interactive
+  // transaction, so the message path now touches the audit table and `$transaction`.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
   message: { create: vi.fn() },
   // Checkpoint 5: the message path resolves the bot configuration as well as its model.
   botConfiguration: { findUnique: vi.fn() },
   knowledgeSource: { findMany: vi.fn() },
+  $transaction: vi.fn(),
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+// `vi.resetAllMocks()` in `beforeEach` clears *implementations*, not just calls — unlike the
+// `vi.clearAllMocks()` the other chat suites use — so the transaction shim is re-applied per
+// test rather than assigned once here.
+const stubTransaction = () =>
+  prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) =>
+    fn(prismaMock)
+  );
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -115,6 +127,7 @@ const patchModel = (body: Record<string, unknown>, user = OWNER) =>
 
 beforeEach(() => {
   vi.resetAllMocks();
+  stubTransaction();
   aiMock.chat.mockResolvedValue({
     status: 'success',
     response: 'Mock assistant reply',
@@ -445,7 +458,15 @@ describe('resolveBotModel — the ladder', () => {
 // ---------------------------------------------------------------------------------------
 
 const arrangeMessage = (resolution: Record<string, unknown>) => {
-  prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+  // One object for one row: `bot.workspaceId` answers the middleware's scope resolution,
+  // `status`/`version` answer the CP3 chat turn's gate and OCC expectation. Without them the
+  // turn reads `undefined`, treats the conversation as human-owned, and never calls the AI —
+  // which would make every assertion below about `aiMock.chat` vacuously true.
+  prismaMock.conversation.findUnique.mockResolvedValue({
+    bot: { workspaceId: WORKSPACE_ID },
+    status: 'ACTIVE',
+    version: 1,
+  });
   membership();
   prismaMock.conversation.findFirst.mockResolvedValue({ id: CONVERSATION_ID, botId: BOT_ID });
   // `isActive` answers the configuration read (Checkpoint 5); the rest answers the model

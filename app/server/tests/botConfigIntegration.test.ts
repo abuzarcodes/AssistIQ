@@ -17,16 +17,41 @@ const prismaMock = vi.hoisted(() => ({
   bot: { findUnique: vi.fn(), findFirst: vi.fn() },
   botConfiguration: { findUnique: vi.fn() },
   conversation: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
+  // CP3: the chat turn commits the assistant message and any escalation in one interactive
+  // transaction, so the message path now touches the audit table and `$transaction`.
+  conversationEvent: { create: vi.fn(), createMany: vi.fn(), findMany: vi.fn() },
   message: { create: vi.fn(), findFirst: vi.fn() },
   knowledgeSource: { findMany: vi.fn() },
   messageFeedback: { upsert: vi.fn(), findUnique: vi.fn(), delete: vi.fn() },
   conversationContact: { upsert: vi.fn() },
+  $transaction: vi.fn(),
 }));
 
 const aiMock = vi.hoisted(() => ({ chat: vi.fn() }));
 
 vi.mock('../src/config/database.js', () => ({ default: prismaMock, prisma: prismaMock }));
 vi.mock('../src/services/aiServiceClient.js', () => ({ aiServiceClient: aiMock }));
+
+// `vi.resetAllMocks()` in `beforeEach` clears *implementations*, not just calls — unlike the
+// `vi.clearAllMocks()` the other chat suites use — so the transaction shim is re-applied per
+// test rather than assigned once here.
+const stubTransaction = () =>
+  prismaMock.$transaction.mockImplementation((fn: (tx: unknown) => Promise<unknown>) =>
+    fn(prismaMock)
+  );
+
+/**
+ * The `conversation.update` calls that changed the lifecycle.
+ *
+ * A successful CP3 turn writes the conversation more than once — the per-message `updatedAt`
+ * touch (§9.3 Phase 1) and the OCC version bump that closes Phase 3 (§9.2) are bookkeeping,
+ * and only an escalation carries a `status`. These flows are about the escalation policy, so
+ * they assert on the transitions rather than on the total call count.
+ */
+const statusTransitions = () =>
+  prismaMock.conversation.update.mock.calls.filter(
+    ([args]) => (args as { data: Record<string, unknown> }).data.status !== undefined
+  );
 
 const { default: app } = await import('../src/app.js');
 const { signToken } = await import('../src/utils/jwt.js');
@@ -56,7 +81,13 @@ const configRow = (overrides: Record<string, unknown> = {}) => ({
 });
 
 const prime = (configOverrides: Record<string, unknown> = {}) => {
-  prismaMock.conversation.findUnique.mockResolvedValue({ bot: { workspaceId: WORKSPACE_ID } });
+  // One object for one row: `bot.workspaceId` answers the middleware's scope resolution,
+  // `status`/`version` answer the CP3 chat turn's pre-flight gate and OCC expectation.
+  prismaMock.conversation.findUnique.mockResolvedValue({
+    bot: { workspaceId: WORKSPACE_ID },
+    status: 'ACTIVE',
+    version: 1,
+  });
   prismaMock.workspaceMember.findUnique.mockResolvedValue({
     id: 'm',
     userId: USER_ID,
@@ -94,6 +125,7 @@ const send = () =>
 
 beforeEach(() => {
   vi.resetAllMocks();
+  stubTransaction();
   aiMock.chat.mockResolvedValue({ status: 'success', response: 'Nine to five.', fallback_required: false });
 });
 
@@ -124,7 +156,7 @@ describe('configure → chat', () => {
 
     const res = await send();
 
-    expect(prismaMock.conversation.update).not.toHaveBeenCalled();
+    expect(statusTransitions()).toHaveLength(0);
     expect(res.body.data.assistantMessage.content).toBe('Sorry, I do not know that yet.');
   });
 
@@ -139,8 +171,8 @@ describe('configure → chat', () => {
 
     const res = await send();
 
-    expect(prismaMock.conversation.update).toHaveBeenCalledTimes(1);
-    const { data } = prismaMock.conversation.update.mock.calls[0][0];
+    expect(statusTransitions()).toHaveLength(1);
+    const { data } = statusTransitions()[0][0];
     expect(data).toMatchObject({
       status: 'WAITING_FOR_HUMAN',
       escalationReason: 'LLM_INSUFFICIENT_INFORMATION',

@@ -38,6 +38,26 @@ declare global {
        * and "too large compared to what?" is exactly what the user needs answered.
        */
       avatarMaxBytes?: number;
+      /**
+       * Resolved by `authenticateVisitor` after a successful visitor-token check (§10.4).
+       *
+       * The token's own claims are not trusted downstream on their own: the middleware has
+       * already re-read the conversation and confirmed the token's `botId` and `workspaceId`
+       * still match the row, so these values are the *database's*, not the bearer's.
+       *
+       * **Identity only — no lifecycle state.** `status` is deliberately not carried here
+       * (it was, briefly, during CP3): it is mutable, and any handler that gated on it would
+       * be gating on a value that can change between the read and the write it guards. The
+       * chat turn reads the status itself at the moment it decides whether to call the AI.
+       *
+       * Optional because only the public routes populate it; the controller narrows it and
+       * fails loudly if the middleware order is wrong, in the same spirit as `uploadLimits`.
+       */
+      visitorContext?: {
+        conversationId: string;
+        botId: string;
+        workspaceId: string;
+      };
     }
   }
 }
