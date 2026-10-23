@@ -24,7 +24,7 @@ export default function RegisterPage() {
 
     try {
       await register(name, email, password);
-      router.push('/dashboard');
+      router.push('/home');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Registration failed');
     } finally {
@@ -37,7 +37,7 @@ export default function RegisterPage() {
       <div className="w-full max-w-sm">
         <div className="mb-8 text-center">
           <div className="mx-auto mb-4 h-10 w-10 rounded-xl bg-accent flex items-center justify-center">
-            <span className="text-lg font-bold text-white">A</span>
+            <span className="text-lg font-bold text-accent-foreground">A</span>
           </div>
           <h1 className="text-xl font-semibold text-foreground">
             Create your account
@@ -49,7 +49,7 @@ export default function RegisterPage() {
 
         <form onSubmit={handleSubmit} className="space-y-4">
           {error && (
-            <div className="rounded-lg bg-[var(--red-50)] dark:bg-[color-mix(in_srgb,var(--red-600)_10%,transparent)] border border-[var(--red-500)]/20 px-3 py-2 text-sm text-[var(--red-600)] dark:text-[var(--red-500)]">
+            <div className="rounded-lg bg-error-bg border border-destructive/20 px-3 py-2 text-sm text-error-bg-foreground">
               {error}
             </div>
           )}
@@ -97,7 +97,7 @@ export default function RegisterPage() {
           Already have an account?{' '}
           <Link
             href="/login"
-            className="font-medium text-accent hover:underline"
+            className="font-medium text-accent-strong hover:underline"
           >
             Sign in
           </Link>

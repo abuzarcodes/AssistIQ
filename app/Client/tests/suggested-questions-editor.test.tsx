@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { SuggestedQuestionsEditor } from '@/app/dashboard/bots/[botId]/_components/suggested-questions-editor';
+import { SuggestedQuestionsEditor } from '@/app/w/[workspaceId]/bots/[botId]/_components/suggested-questions-editor';
 
 /**
  * Checkpoint 6 — the suggested-questions editor (§16.1).

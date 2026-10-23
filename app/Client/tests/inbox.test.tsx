@@ -1,14 +1,34 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
 import { ToastProvider } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api-client';
 import type { QueueItem, Conversation } from '@/lib/api/conversations';
 
 // Mock Next.js navigation
+const { redirectMock } = vi.hoisted(() => ({ redirectMock: vi.fn() }));
 vi.mock('next/navigation', () => ({
+  redirect: redirectMock,
   useParams: () => ({ workspaceId: 'ws-123' }),
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
-  usePathname: () => '/dashboard/workspaces/ws-123/inbox',
+  usePathname: () => '/w/ws-123/inbox',
+}));
+
+// The workspace shell owns this request in the app; the page reads its context.
+vi.mock('@/lib/workspace-context', () => ({
+  useWorkspace: () => ({
+    workspaceId: 'ws-123',
+    workspace: {
+      id: 'ws-123',
+      name: 'Acme Support',
+      ownerId: 'owner-1',
+      viewerRole: 'ADMIN',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+    loading: false,
+    error: null,
+    reload: vi.fn(),
+  }),
 }));
 
 // Mock Auth Context
@@ -105,9 +125,11 @@ vi.mock('@/lib/api/conversations', () => ({
 }));
 
 const WorkspaceInboxPage = (
-  await import(
-    '@/app/dashboard/workspaces/[workspaceId]/inbox/page'
-  )
+  await import('@/app/w/[workspaceId]/inbox/page')
+).default;
+
+const LegacyWorkspaceInboxPage = (
+  await import('@/app/dashboard/workspaces/[workspaceId]/inbox/page')
 ).default;
 
 const mockQueueItem: QueueItem = {
@@ -180,7 +202,7 @@ const mockConversationDetail: Conversation = {
   ],
 };
 
-describe('Support Agent Inbox Dashboard (CP5)', () => {
+describe('Support Agent Inbox (CP8)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     Object.keys(socketListeners).forEach((k) => delete socketListeners[k]);
@@ -191,6 +213,14 @@ describe('Support Agent Inbox Dashboard (CP5)', () => {
     });
 
     getConversationMock.mockResolvedValue(mockConversationDetail);
+  });
+
+  it('redirects the legacy workspace inbox URL to the workspace-scoped route', async () => {
+    await LegacyWorkspaceInboxPage({
+      params: Promise.resolve({ workspaceId: 'ws 123' }),
+    });
+
+    expect(redirectMock).toHaveBeenCalledWith('/w/ws%20123/inbox');
   });
 
   it('renders queue items with waiting duration badge, bot name, and status', async () => {
@@ -322,7 +352,7 @@ describe('Support Agent Inbox Dashboard (CP5)', () => {
     });
 
     // Type reply into textarea
-    const textarea = screen.getByPlaceholderText(/Reply as support agent/i);
+    const textarea = screen.getByPlaceholderText(/Write a reply/i);
     fireEvent.change(textarea, { target: { value: replyText } });
 
     // Click Send button
@@ -332,6 +362,28 @@ describe('Support Agent Inbox Dashboard (CP5)', () => {
     await waitFor(() => {
       expect(sendAgentReplyMock).toHaveBeenCalledWith(mockQueueItem.id, replyText);
       expect(screen.getByText(replyText)).toBeInTheDocument();
+    });
+
+    // The realtime echo for an agent reply carries no clientMessageId. It must
+    // not render a second copy after the HTTP response replaced the optimistic row.
+    const messageNewHandlers = socketListeners['message:new'] || [];
+    await act(async () => {
+      messageNewHandlers.forEach((handler) =>
+        handler({
+          id: 'msg-agent-reply-1',
+          conversationId: mockQueueItem.id,
+          role: 'AGENT',
+          content: replyText,
+          createdAt: new Date().toISOString(),
+          clientMessageId: null,
+          senderId: 'agent-1',
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      const transcript = screen.getByRole('log', { name: 'Conversation transcript' });
+      expect(within(transcript).getAllByText(replyText)).toHaveLength(1);
     });
   });
 

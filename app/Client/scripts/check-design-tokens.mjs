@@ -11,10 +11,10 @@ import { join, relative, sep } from 'node:path';
  * Two exemptions, both explicit and justified:
  *   - `app/globals.css` **is** the token system; it is the one file allowed to contain the
  *     palette's hex values.
- *   - A small allow-list of pre-existing literals outside the token system (the sidebar
- *     logo, the switch knob, the two auth-page logos, the AI Lab icon, and the two
- *     `bg-black/40` dialog backdrops). These predate the feature; the rule is "introduce no
- *     NEW literal", so they are recorded rather than silently permitted.
+ *   - A small allow-list of pre-existing literals outside the token system (the switch knob
+ *     and the two `bg-black/40` dialog/sidebar backdrops). These predate the feature; the
+ *     rule is "introduce no NEW literal", so they are recorded rather than silently
+ *     permitted.
  *
  * A deliberate literal anywhere else exits 1.
  */
@@ -29,12 +29,8 @@ const PATTERN =
 /** Pre-existing literals, exempted by file and exact token. Keep this list narrow. */
 const ALLOWLIST = [
   { file: 'components/ui/switch.tsx', token: 'bg-white' },
-  { file: 'components/sidebar.tsx', token: 'text-white' },
   { file: 'components/sidebar.tsx', token: 'bg-black/40' },
   { file: 'components/ui/dialog.tsx', token: 'bg-black/40' },
-  { file: 'app/login/page.tsx', token: 'text-white' },
-  { file: 'app/register/page.tsx', token: 'text-white' },
-  { file: 'app/platform/ai-lab/page.tsx', token: 'text-white' },
 ];
 
 function walk(dir, files) {

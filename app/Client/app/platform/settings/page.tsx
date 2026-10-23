@@ -247,7 +247,7 @@ export default function PlatformSettingsPage() {
           </CardHeader>
           <CardBody className="space-y-4">
             {serverError && (
-              <div className="rounded-lg bg-[var(--red-50)] dark:bg-[color-mix(in_srgb,var(--red-600)_10%,transparent)] border border-[var(--red-500)]/20 px-3 py-2 text-sm text-[var(--red-600)] dark:text-[var(--red-500)]">
+              <div className="rounded-lg bg-error-bg border border-destructive/20 px-3 py-2 text-sm text-error-bg-foreground">
                 {serverError}
               </div>
             )}

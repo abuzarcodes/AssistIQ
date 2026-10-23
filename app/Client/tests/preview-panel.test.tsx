@@ -17,7 +17,7 @@ vi.mock('@/lib/api/botConfig', () => ({
 }));
 
 const { PreviewPanel } = await import(
-  '@/app/dashboard/bots/[botId]/_components/preview-panel'
+  '@/app/w/[workspaceId]/bots/[botId]/_components/preview-panel'
 );
 
 const draft: ResolvedBotConfig = {

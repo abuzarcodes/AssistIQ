@@ -75,7 +75,7 @@ export function FileInput({
           type="button"
           disabled={disabled}
           onClick={() => inputRef.current?.click()}
-          className="text-sm font-medium text-accent cursor-pointer disabled:cursor-not-allowed"
+          className="cursor-pointer text-sm font-medium text-foreground underline decoration-border underline-offset-4 transition-colors hover:decoration-foreground disabled:cursor-not-allowed disabled:opacity-60"
         >
           Choose a file
         </button>

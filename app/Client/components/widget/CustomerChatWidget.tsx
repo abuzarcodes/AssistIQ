@@ -6,14 +6,10 @@ import {
   X,
   Send,
   Bot,
-  User,
   Headphones,
   Clock,
   CheckCircle2,
-  AlertCircle,
   Minimize2,
-  ChevronDown,
-  RotateCcw,
   Sparkles,
   Wifi,
   WifiOff,
@@ -33,7 +29,6 @@ import {
   clearStoredSession,
   type PublicMessage,
   type PublicConversation,
-  type StoredVisitorSession,
   PublicApiError,
 } from '@/lib/api/publicChat';
 
@@ -58,7 +53,7 @@ export function CustomerChatWidget({
   className = '',
 }: CustomerChatWidgetProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen || standalone);
-  const [initializing, setInitializing] = useState(false);
+  const [initializing, setInitializing] = useState(true);
   const [conversation, setConversation] = useState<PublicConversation | null>(null);
   const [visitorToken, setVisitorToken] = useState<string | null>(null);
   const [sessionSecret, setSessionSecret] = useState<string | null>(null);
@@ -81,7 +76,10 @@ export function CustomerChatWidget({
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const convIdRef = useRef<string | null>(null);
-  convIdRef.current = conversation?.id || null;
+
+  useEffect(() => {
+    convIdRef.current = conversation?.id ?? null;
+  }, [conversation?.id]);
 
   // Auto-scroll to bottom on messages update
   useEffect(() => {
@@ -93,7 +91,6 @@ export function CustomerChatWidget({
   // Focus input on open
   useEffect(() => {
     if (isOpen) {
-      setUnreadCount(0);
       inputRef.current?.focus();
     }
   }, [isOpen]);
@@ -101,8 +98,6 @@ export function CustomerChatWidget({
   // Initialize or resume conversation session
   const initSession = useCallback(async () => {
     if (!botId) return;
-    setInitializing(true);
-    setErrorBanner(null);
 
     const stored = getStoredSession(botId);
 
@@ -193,7 +188,17 @@ export function CustomerChatWidget({
   }, [botId]);
 
   useEffect(() => {
-    initSession();
+    let active = true;
+
+    // Defer one microtask so the initializing state from the first render is not
+    // overwritten synchronously inside the effect body.
+    void Promise.resolve().then(() => {
+      if (active) return initSession();
+    });
+
+    return () => {
+      active = false;
+    };
   }, [initSession]);
 
   // Periodic token refresh (every 10 minutes)
@@ -456,7 +461,10 @@ export function CustomerChatWidget({
       {!standalone && !isOpen && (
         <button
           type="button"
-          onClick={() => setIsOpen(true)}
+          onClick={() => {
+            setUnreadCount(0);
+            setIsOpen(true);
+          }}
           aria-label="Open chat support"
           className="relative h-14 w-14 rounded-full bg-accent text-accent-foreground shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 flex items-center justify-center cursor-pointer group"
         >
@@ -483,7 +491,7 @@ export function CustomerChatWidget({
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="relative">
                 <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center">
-                  <Bot className="h-4 w-4 text-accent" />
+                  <Bot className="h-4 w-4 text-accent-strong" />
                 </div>
                 <span
                   className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
@@ -544,7 +552,7 @@ export function CustomerChatWidget({
           )}
 
           {isWaiting && (
-            <div className="px-3.5 py-2.5 bg-[var(--amber-50)] dark:bg-[color-mix(in_srgb,var(--amber-500)_15%,transparent)] border-b border-[var(--amber-500)]/30 text-xs text-[var(--amber-600)] dark:text-[var(--amber-400)] flex items-center gap-2">
+            <div className="px-3.5 py-2.5 bg-warning-bg border-b border-warning-bg-foreground/30 text-xs text-warning-bg-foreground flex items-center gap-2">
               <Clock className="h-4 w-4 shrink-0 animate-pulse" />
               <div>
                 <p className="font-semibold">Waiting for an available specialist...</p>
@@ -556,7 +564,7 @@ export function CustomerChatWidget({
           )}
 
           {isHumanActive && (
-            <div className="px-3.5 py-2 bg-accent/10 border-b border-accent/20 text-xs text-accent flex items-center gap-2">
+            <div className="px-3.5 py-2 bg-accent/10 border-b border-accent/20 text-xs text-accent-strong flex items-center gap-2">
               <Headphones className="h-4 w-4 shrink-0" />
               <span>Connected with a support specialist</span>
             </div>
@@ -579,7 +587,7 @@ export function CustomerChatWidget({
               <button
                 type="button"
                 onClick={() => setShowContactForm(true)}
-                className="text-accent font-medium hover:underline cursor-pointer"
+                className="text-accent-strong font-medium hover:underline cursor-pointer"
               >
                 Leave your details
               </button>
@@ -636,7 +644,7 @@ export function CustomerChatWidget({
             ) : messages.length === 0 ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-8 text-muted-foreground">
                 <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center mb-2">
-                  <Sparkles className="h-5 w-5 text-accent" />
+                  <Sparkles className="h-5 w-5 text-accent-strong" />
                 </div>
                 <p className="text-xs font-semibold text-foreground">Hi there! How can we help?</p>
                 <p className="text-[11px] text-muted-foreground mt-1 max-w-xs">
@@ -662,7 +670,7 @@ export function CustomerChatWidget({
                       )}
                       {isAssistant && (
                         <div className="h-3.5 w-3.5 rounded-full bg-muted flex items-center justify-center">
-                          <Bot className="h-2 w-2 text-accent" />
+                          <Bot className="h-2 w-2 text-accent-strong" />
                         </div>
                       )}
                       <span className="text-[10px] font-medium text-muted-foreground">
@@ -705,7 +713,7 @@ export function CustomerChatWidget({
 
             {isTyping && (
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground py-1 px-2 animate-fade-in">
-                <Bot className="h-3.5 w-3.5 text-accent animate-pulse" />
+                <Bot className="h-3.5 w-3.5 text-accent-strong animate-pulse" />
                 <span className="text-[11px] italic">Assistant is typing...</span>
               </div>
             )}

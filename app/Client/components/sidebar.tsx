@@ -17,7 +17,7 @@ import {
   PLATFORM_PERMISSIONS,
   type PlatformPermission,
 } from "@/lib/permissions";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 /**
  * Each item declares the permission it needs. `null` means "any signed-in user".
@@ -66,6 +66,59 @@ export function Sidebar() {
   const pathname = usePathname();
   const { user, logout, hasPermission } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const drawerRef = useRef<HTMLElement>(null);
+  const drawerHasOpened = useRef(false);
+
+  useEffect(() => {
+    if (!mobileOpen) return;
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') {
+        setMobileOpen(false);
+        return;
+      }
+      if (event.key !== 'Tab' || !drawerRef.current) return;
+
+      const focusables = [
+        ...drawerRef.current.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ),
+      ].filter((element) => element.getClientRects().length > 0);
+
+      if (focusables.length === 0) return;
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [mobileOpen]);
+
+  useEffect(() => {
+    if (mobileOpen) {
+      drawerHasOpened.current = true;
+      closeButtonRef.current?.focus();
+    } else if (drawerHasOpened.current) {
+      drawerHasOpened.current = false;
+      menuButtonRef.current?.focus();
+    }
+  }, [mobileOpen]);
 
   // Permission-gated items are dropped entirely for users who lack the permission —
   // the server would reject the calls behind them anyway, so showing them would only
@@ -83,14 +136,14 @@ export function Sidebar() {
     <>
       <div className="flex items-center gap-2.5 px-5 py-5 border-b border-sidebar-border">
         <div className="h-7 w-7 rounded-lg bg-accent flex items-center justify-center">
-          <span className="text-xs font-bold text-white">A</span>
+          <span className="text-xs font-bold text-accent-foreground">A</span>
         </div>
         <span className="text-sm font-semibold text-foreground tracking-tight">
           AssistIQ
         </span>
       </div>
 
-      <nav className="flex-1 px-3 py-3 space-y-0.5">
+      <nav aria-label="Platform" className="flex-1 px-3 py-3 space-y-0.5">
         {visibleItems.map((item) => {
           const Icon = item.icon;
           const active = isActive(item.href);
@@ -99,13 +152,14 @@ export function Sidebar() {
               key={item.href}
               href={item.href}
               onClick={() => setMobileOpen(false)}
-              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+              aria-current={active ? 'page' : undefined}
+              className={`flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 ${
                 active
                   ? "bg-sidebar-active text-sidebar-active-foreground"
                   : "text-sidebar-foreground hover:bg-muted"
               }`}
             >
-              <Icon className="h-4 w-4" />
+              <Icon aria-hidden="true" className="h-4 w-4" />
               {item.label}
             </Link>
           );
@@ -129,13 +183,14 @@ export function Sidebar() {
           </div>
         </div>
         <button
+          type="button"
           onClick={async () => {
             await logout();
             setMobileOpen(false);
           }}
-          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
         >
-          <LogOut className="h-3.5 w-3.5" />
+          <LogOut aria-hidden="true" className="h-3.5 w-3.5" />
           Sign out
         </button>
       </div>
@@ -146,10 +201,15 @@ export function Sidebar() {
     <>
       {/* Mobile toggle */}
       <button
+        ref={menuButtonRef}
+        type="button"
         onClick={() => setMobileOpen(true)}
-        className="fixed top-3 left-3 z-40 lg:hidden rounded-lg bg-card border border-border p-2 shadow-sm cursor-pointer"
+        aria-label="Open platform navigation"
+        aria-expanded={mobileOpen}
+        aria-controls="platform-navigation-drawer"
+        className="fixed top-3 left-3 z-40 rounded-lg border border-border bg-card p-2 shadow-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 lg:hidden cursor-pointer"
       >
-        <Menu className="h-4 w-4" />
+        <Menu aria-hidden="true" className="h-4 w-4" />
       </button>
 
       {/* Mobile overlay */}
@@ -162,15 +222,24 @@ export function Sidebar() {
 
       {/* Mobile drawer */}
       <aside
-        className={`fixed inset-y-0 left-0 z-50 w-60 bg-sidebar border-r border-sidebar-border flex flex-col transition-transform duration-200 lg:hidden ${
+        ref={drawerRef}
+        id="platform-navigation-drawer"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Platform navigation"
+        inert={!mobileOpen}
+        className={`fixed inset-y-0 left-0 z-50 flex w-60 flex-col border-r border-sidebar-border bg-sidebar transition-transform duration-200 lg:hidden ${
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
         <button
+          ref={closeButtonRef}
+          type="button"
           onClick={() => setMobileOpen(false)}
-          className="absolute top-3 right-3 rounded-lg p-1 text-muted-foreground hover:text-foreground cursor-pointer"
+          aria-label="Close platform navigation"
+          className="absolute top-3 right-3 rounded-lg p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
         >
-          <X className="h-4 w-4" />
+          <X aria-hidden="true" className="h-4 w-4" />
         </button>
         {nav}
       </aside>

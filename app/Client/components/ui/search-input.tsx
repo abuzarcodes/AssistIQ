@@ -7,6 +7,8 @@ interface SearchInputProps {
   value: string;
   onChange: (value: string) => void;
   placeholder?: string;
+  /** Accessible name. Falls back to the placeholder, which is descriptive here. */
+  ariaLabel?: string;
   /** How long typing must pause before `onChange` fires. */
   delay?: number;
   className?: string;
@@ -30,6 +32,7 @@ export function SearchInput({
   value,
   onChange,
   placeholder = 'Search…',
+  ariaLabel,
   delay = 300,
   className = '',
 }: SearchInputProps) {
@@ -66,13 +69,17 @@ export function SearchInput({
 
   return (
     <div className={`relative ${className}`}>
-      <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+      <Search
+        aria-hidden="true"
+        className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
+      />
       <input
         type="search"
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder={placeholder}
-        className="h-9 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-sm text-foreground transition-colors placeholder:text-muted-foreground focus:border-accent focus:outline-none"
+        aria-label={ariaLabel ?? placeholder}
+        className="h-9 w-full rounded-lg border border-border bg-background pl-8 pr-8 text-sm text-foreground transition-colors placeholder:text-muted-foreground focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       />
       {text && (
         <button
@@ -84,7 +91,7 @@ export function SearchInput({
             setText('');
             onChangeRef.current('');
           }}
-          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
         >
           <X className="h-3.5 w-3.5" />
         </button>

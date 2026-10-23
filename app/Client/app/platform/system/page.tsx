@@ -47,7 +47,7 @@ export default function PlatformSystemPage() {
               <CardBody>
                 <div className="flex items-center gap-3">
                   <div className="rounded-lg bg-muted p-2">
-                    <Database className="h-4 w-4 text-accent" />
+                    <Database className="h-4 w-4 text-accent-strong" />
                   </div>
                   <div className="flex-1">
                     <p className="text-xs text-muted-foreground">Database</p>
@@ -66,7 +66,7 @@ export default function PlatformSystemPage() {
               <CardBody>
                 <div className="flex items-center gap-3">
                   <div className="rounded-lg bg-muted p-2">
-                    <Server className="h-4 w-4 text-accent" />
+                    <Server className="h-4 w-4 text-accent-strong" />
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-muted-foreground">AI service</p>

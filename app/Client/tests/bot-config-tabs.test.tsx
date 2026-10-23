@@ -16,6 +16,7 @@ const getBotConfig = vi.fn();
 const updateBotConfig = vi.fn();
 const previewBotConfig = vi.fn();
 const getBotAvatarBlob = vi.fn();
+const resetBotConfig = vi.fn();
 
 vi.mock('@/lib/api/botConfig', () => ({
   getBotConfig: (...args: unknown[]) => getBotConfig(...args),
@@ -24,7 +25,7 @@ vi.mock('@/lib/api/botConfig', () => ({
   getBotAvatarBlob: (...args: unknown[]) => getBotAvatarBlob(...args),
   uploadBotAvatar: vi.fn(),
   deleteBotAvatar: vi.fn(),
-  resetBotConfig: vi.fn(),
+  resetBotConfig: (...args: unknown[]) => resetBotConfig(...args),
 }));
 
 vi.mock('@/lib/api/bots', () => ({
@@ -33,7 +34,7 @@ vi.mock('@/lib/api/bots', () => ({
 }));
 
 const { BotConfigTabs } = await import(
-  '@/app/dashboard/bots/[botId]/_components/bot-config-tabs'
+  '@/app/w/[workspaceId]/bots/[botId]/_components/bot-config-tabs'
 );
 
 const config: ResolvedBotConfig = {
@@ -177,6 +178,30 @@ describe('BotConfigTabs — draft lifecycle', () => {
     expect((displayName as HTMLInputElement).value).toBe('Ada');
     // The save bar is still showing (with the error in place of the "unsaved" line).
     expect(screen.getByRole('button', { name: 'Save changes' })).toBeInTheDocument();
+  });
+
+  it('opens a section from the rail and resets that section with the current version', async () => {
+    resetBotConfig.mockResolvedValue(response({ version: 5 }));
+    renderTabs();
+    await screen.findByLabelText('Display name');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Personality' }));
+
+    expect(
+      screen.getByRole('heading', { name: 'Personality' }),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset section' }));
+    expect(screen.getByText('Reset Personality?')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Reset Personality' }));
+
+    await waitFor(() =>
+      expect(resetBotConfig).toHaveBeenCalledWith(bot.id, {
+        section: 'personality',
+        expectedVersion: 4,
+      }),
+    );
   });
 
   it('opens the conflict dialog on 409', async () => {

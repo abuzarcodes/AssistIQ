@@ -11,18 +11,18 @@ interface BadgeProps {
 
 const variantClasses: Record<BadgeVariant, string> = {
   default: 'bg-muted text-muted-foreground',
-  success: 'bg-[var(--green-50)] text-[var(--green-600)] dark:bg-[color-mix(in_srgb,var(--green-600)_15%,transparent)] dark:text-[var(--green-500)]',
-  warning: 'bg-[var(--amber-50)] text-[var(--amber-500)] dark:bg-[color-mix(in_srgb,var(--amber-500)_15%,transparent)]',
-  danger: 'bg-[var(--red-50)] text-[var(--red-600)] dark:bg-[color-mix(in_srgb,var(--red-600)_15%,transparent)] dark:text-[var(--red-500)]',
-  info: 'bg-[var(--blue-50)] text-[var(--blue-500)] dark:bg-[color-mix(in_srgb,var(--blue-500)_15%,transparent)]',
+  success: 'bg-success-bg text-success-bg-foreground',
+  warning: 'bg-warning-bg text-warning-bg-foreground',
+  danger: 'bg-error-bg text-error-bg-foreground',
+  info: 'bg-info-bg text-info-bg-foreground',
 };
 
 const dotColors: Record<BadgeVariant, string> = {
   default: 'bg-muted-foreground',
-  success: 'bg-[var(--green-500)]',
-  warning: 'bg-[var(--amber-500)]',
-  danger: 'bg-[var(--red-500)]',
-  info: 'bg-[var(--blue-500)]',
+  success: 'bg-success',
+  warning: 'bg-warning',
+  danger: 'bg-destructive',
+  info: 'bg-info',
 };
 
 export function Badge({ variant = 'default', children, className = '', dot }: BadgeProps) {

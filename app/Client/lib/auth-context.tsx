@@ -42,19 +42,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Check existing token on mount
   useEffect(() => {
+    let active = true;
     const token = localStorage.getItem('assistiq_token');
+
     if (!token) {
-      setLoading(false);
-      return;
+      // Defer the state update out of the effect body so the initial render does not
+      // cascade into a second render before the browser has painted.
+      const timer = window.setTimeout(() => {
+        if (active) setLoading(false);
+      }, 0);
+      return () => {
+        active = false;
+        window.clearTimeout(timer);
+      };
     }
 
     authApi
       .getMe()
-      .then(setUser)
+      .then((currentUser) => {
+        if (active) setUser(currentUser);
+      })
       .catch(() => {
         clearToken();
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (active) setLoading(false);
+      });
+
+    return () => {
+      active = false;
+    };
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {

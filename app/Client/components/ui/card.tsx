@@ -27,10 +27,14 @@ export function CardBody({ children, className = '' }: CardProps) {
   return <div className={`px-5 py-4 ${className}`}>{children}</div>;
 }
 
-export function CardTitle({ children, className = '' }: CardProps) {
+export function CardTitle({
+  children,
+  className = '',
+  as: Heading = 'h3',
+}: CardProps & { as?: 'h2' | 'h3' | 'h4' }) {
   return (
-    <h3 className={`text-sm font-semibold text-foreground ${className}`}>
+    <Heading className={`text-sm font-semibold text-foreground ${className}`}>
       {children}
-    </h3>
+    </Heading>
   );
 }

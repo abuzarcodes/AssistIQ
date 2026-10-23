@@ -64,6 +64,10 @@ function throwApiError(status: number, body: ApiResponse<unknown>): never {
   if (status === 401) {
     clearToken();
     if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+      // This module is not a React component and cannot call `useRouter`. A hard
+      // navigation is intentional: the session is already invalid and every cached
+      // client state must be discarded.
+      // eslint-disable-next-line @next/next/no-location-assign-relative-destination
       window.location.href = '/login';
     }
   } else if (status === 403) {

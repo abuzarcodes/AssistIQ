@@ -37,7 +37,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={{ toast: addToast }}>
       {children}
-      <div className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none">
+      <div
+        role="region"
+        aria-label="Notifications"
+        className="fixed bottom-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none"
+      >
         {toasts.map((t) => (
           <ToastItem key={t.id} toast={t} onDismiss={() => dismiss(t.id)} />
         ))}
@@ -47,22 +51,26 @@ export function ToastProvider({ children }: { children: ReactNode }) {
 }
 
 const variantClasses: Record<ToastVariant, string> = {
-  success: 'border-[var(--green-500)]/20 bg-card',
-  error: 'border-[var(--red-500)]/20 bg-card',
+  success: 'border-success/20 bg-card',
+  error: 'border-destructive/20 bg-card',
   info: 'border-border bg-card',
 };
 
 function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }) {
   return (
     <div
+      role={toast.variant === 'error' ? 'alert' : 'status'}
+      aria-atomic="true"
       className={`pointer-events-auto flex items-center gap-3 rounded-lg border px-4 py-3 shadow-lg animate-slide-in min-w-[280px] max-w-[400px] ${variantClasses[toast.variant]}`}
     >
       <span className="text-sm text-foreground flex-1">{toast.message}</span>
       <button
+        type="button"
         onClick={onDismiss}
-        className="text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+        aria-label="Dismiss notification"
+        className="rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
       >
-        <X className="h-3.5 w-3.5" />
+        <X aria-hidden="true" className="h-3.5 w-3.5" />
       </button>
     </div>
   );

@@ -12,16 +12,37 @@ export function classify(text: string) {
 }
 
 /* ---------- Status ---------- */
+export interface AiStatusResponse {
+  api?: string;
+  ml_model?: string;
+  vector_store?: string;
+  embedding_service?: string;
+  llm?: string;
+}
+
+export interface MlStatusResponse {
+  model_type?: string;
+  classes?: string[];
+}
+
+export interface TestingStatusResponse {
+  api?: string;
+  ml_model?: string;
+  vector_store?: string;
+  embedding_service?: string;
+  llm?: string;
+}
+
 export function getAiStatus() {
-  return apiGet<Record<string, unknown>>('/admin/ai/status');
+  return apiGet<AiStatusResponse>('/admin/ai/status');
 }
 
 export function getMlStatus() {
-  return apiGet<Record<string, unknown>>('/admin/ai/ml-status');
+  return apiGet<MlStatusResponse>('/admin/ai/ml-status');
 }
 
 export function getTestingStatus() {
-  return apiGet<Record<string, unknown>>('/admin/ai/testing/status');
+  return apiGet<TestingStatusResponse>('/admin/ai/testing/status');
 }
 
 /* ---------- ML Evaluate ---------- */

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, type FormEvent, type ReactNode } from 'react';
 import {
   FlaskConical,
   Activity,
@@ -9,7 +9,6 @@ import {
   GitMerge,
   BarChart,
   Database,
-  ArrowRight,
   CheckCircle2,
   XCircle,
   MessageSquare,
@@ -23,9 +22,18 @@ import {
   debugPipeline,
   evaluateMl,
   getVectorStats,
+  type AiStatusResponse,
+  type ClassifyResponse,
+  type MlEvaluationResponse,
+  type MlStatusResponse,
+  type PipelineDebugResponse,
+  type RagSearchResponse,
+  type TestingStatusResponse,
+  type VectorStatsResponse,
 } from '@/lib/api/ai';
 import { listWorkspaces } from '@/lib/api/workspaces';
 import { listBots, type Bot } from '@/lib/api/bots';
+import { ApiError } from '@/lib/api-client';
 import { Tabs } from '@/components/ui/tabs';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -49,20 +57,24 @@ export default function AiLabPage() {
           allBots.push(...wsBots);
         }
         setBots(allBots);
-      } catch (e) {
-        // ignore
+      } catch {
+        setBots([]);
       } finally {
         setLoadingBots(false);
       }
     }
-    loadAllBots();
+    void loadAllBots();
   }, []);
 
   const tabs = [
     { id: 'overview', label: 'Overview', content: <OverviewTab /> },
     { id: 'classifier', label: 'Intent Classifier', content: <ClassifierTab /> },
-    { id: 'rag', label: 'RAG Search', content: <RagTab bots={bots} /> },
-    { id: 'pipeline', label: 'Pipeline Debug', content: <PipelineTab bots={bots} /> },
+    { id: 'rag', label: 'RAG Search', content: <RagTab bots={bots} loadingBots={loadingBots} /> },
+    {
+      id: 'pipeline',
+      label: 'Pipeline Debug',
+      content: <PipelineTab bots={bots} loadingBots={loadingBots} />,
+    },
     { id: 'ml-eval', label: 'ML Evaluation', content: <MlEvalTab /> },
     { id: 'vector', label: 'Vector DB', content: <VectorTab /> },
   ];
@@ -71,7 +83,7 @@ export default function AiLabPage() {
     <div className="animate-fade-in">
       <div className="mb-6 flex items-center gap-3">
         <div className="h-10 w-10 rounded-xl bg-accent flex items-center justify-center shadow-sm">
-          <FlaskConical className="h-5 w-5 text-white" />
+          <FlaskConical className="h-5 w-5 text-accent-foreground" />
         </div>
         <div>
           <h1 className="text-xl font-semibold text-foreground tracking-tight">AI Lab</h1>
@@ -83,7 +95,7 @@ export default function AiLabPage() {
 
       <Card>
         <CardBody className="p-0">
-          <Tabs tabs={tabs} defaultTab="overview" />
+          <Tabs tabs={tabs} defaultTab="overview" ariaLabel="AI Lab sections" />
         </CardBody>
       </Card>
     </div>
@@ -99,11 +111,11 @@ function StatusItem({ label, status }: { label: string; status: string }) {
       <span className="text-sm text-foreground">{label}</span>
       <div className="flex items-center gap-2">
         {isHealthy ? (
-          <CheckCircle2 className="h-4 w-4 text-[var(--green-500)]" />
+          <CheckCircle2 className="h-4 w-4 text-success-bg-foreground" />
         ) : (
-          <XCircle className="h-4 w-4 text-[var(--red-500)]" />
+          <XCircle className="h-4 w-4 text-error-bg-foreground" />
         )}
-        <span className={`text-sm font-medium ${isHealthy ? 'text-[var(--green-600)] dark:text-[var(--green-500)]' : 'text-[var(--red-600)] dark:text-[var(--red-500)]'}`}>
+        <span className={`text-sm font-medium ${isHealthy ? 'text-success-bg-foreground' : 'text-error-bg-foreground'}`}>
           {status}
         </span>
       </div>
@@ -111,8 +123,14 @@ function StatusItem({ label, status }: { label: string; status: string }) {
   );
 }
 
+interface OverviewData {
+  sys: TestingStatusResponse;
+  ml: MlStatusResponse;
+  ai: AiStatusResponse;
+}
+
 function OverviewTab() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<OverviewData | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -127,34 +145,36 @@ function OverviewTab() {
   if (loading) return <div className="py-20 flex justify-center"><Spinner /></div>;
   if (!data) return <div className="p-8 text-center text-muted-foreground">Failed to load status.</div>;
 
+  const mlClasses = data.ml.classes ?? [];
+
   return (
     <div className="p-6 grid grid-cols-1 md:grid-cols-2 gap-6">
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Activity className="h-4 w-4" /> System Health</CardTitle>
+          <CardTitle as="h2" className="flex items-center gap-2"><Activity className="h-4 w-4" /> System Health</CardTitle>
         </CardHeader>
         <CardBody>
           <StatusItem label="API Gateway" status={data.sys.api || 'Healthy'} />
           <StatusItem label="ML Intent Model" status={data.sys.ml_model || 'Unknown'} />
           <StatusItem label="Vector Database" status={data.sys.vector_store || 'Unknown'} />
           <StatusItem label="Embedding Service" status={data.sys.embedding_service || 'Unknown'} />
-          <StatusItem label="LLM Provider" status={data.sys.llm || 'Unknown'} />
+          <StatusItem label="LLM Provider" status={data.ai.llm || data.sys.llm || 'Unknown'} />
         </CardBody>
       </Card>
 
       <div className="space-y-6">
         <Card>
           <CardHeader>
-            <CardTitle className="flex items-center gap-2"><Brain className="h-4 w-4" /> ML Model Details</CardTitle>
+            <CardTitle as="h2" className="flex items-center gap-2"><Brain className="h-4 w-4" /> ML Model Details</CardTitle>
           </CardHeader>
           <CardBody>
              <p className="text-sm mb-1"><span className="text-muted-foreground">Type:</span> {data.ml.model_type}</p>
-             <p className="text-sm mb-3"><span className="text-muted-foreground">Classes:</span> {data.ml.classes?.length || 0} supported intents</p>
+             <p className="text-sm mb-3"><span className="text-muted-foreground">Classes:</span> {mlClasses.length} supported intents</p>
              <div className="flex flex-wrap gap-1.5">
-               {data.ml.classes?.slice(0, 5).map((c: string) => (
+               {mlClasses.slice(0, 5).map((c: string) => (
                  <Badge key={c} variant="default">{c}</Badge>
                ))}
-               {data.ml.classes?.length > 5 && <Badge variant="default">+{data.ml.classes.length - 5} more</Badge>}
+               {mlClasses.length > 5 && <Badge variant="default">+{mlClasses.length - 5} more</Badge>}
              </div>
           </CardBody>
         </Card>
@@ -166,18 +186,18 @@ function OverviewTab() {
 function ClassifierTab() {
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<ClassifyResponse | null>(null);
   const { toast } = useToast();
 
-  async function handleRun(e: React.FormEvent) {
+  async function handleRun(e: FormEvent) {
     e.preventDefault();
     if (!text.trim()) return;
     setLoading(true);
     try {
       const res = await classify(text);
       setResult(res);
-    } catch (err: any) {
-      toast(err.message || 'Classification failed', 'error');
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Classification failed', 'error');
     } finally {
       setLoading(false);
     }
@@ -216,7 +236,7 @@ function ClassifierTab() {
                <div>
                   <p className="text-xs text-muted-foreground uppercase tracking-wider font-semibold mb-2">Other Probabilities</p>
                   <div className="space-y-2">
-                    {result.top_predictions.slice(1, 4).map((p: any) => (
+                    {result.top_predictions.slice(1, 4).map((p) => (
                       <div key={p.intent} className="flex items-center justify-between text-sm">
                         <span>{p.intent}</span>
                         <span className="font-mono text-muted-foreground">{(p.confidence * 100).toFixed(1)}%</span>
@@ -232,22 +252,22 @@ function ClassifierTab() {
   );
 }
 
-function RagTab({ bots }: { bots: Bot[] }) {
+function RagTab({ bots, loadingBots }: { bots: Bot[]; loadingBots: boolean }) {
   const [botId, setBotId] = useState('');
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<RagSearchResponse | null>(null);
   const { toast } = useToast();
 
-  async function handleRun(e: React.FormEvent) {
+  async function handleRun(e: FormEvent) {
     e.preventDefault();
     if (!botId || !query.trim()) return;
     setLoading(true);
     try {
       const res = await ragSearch({ bot_id: botId, query, top_k: 3 });
       setResult(res);
-    } catch (err: any) {
-      toast(err.message || 'Search failed', 'error');
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Search failed', 'error');
     } finally {
       setLoading(false);
     }
@@ -260,15 +280,18 @@ function RagTab({ bots }: { bots: Bot[] }) {
          <form onSubmit={handleRun} className="space-y-4">
            <div className="flex gap-4">
              <select 
-               className="h-9 rounded-lg border border-border bg-background px-3 text-sm focus:border-accent focus:outline-none w-64"
+               aria-label="Bot"
+               className="h-9 w-64 rounded-lg border border-border bg-background px-3 text-sm focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                value={botId}
                onChange={(e) => setBotId(e.target.value)}
+               disabled={loadingBots}
                required
              >
-               <option value="">Select Bot...</option>
+               <option value="">{loadingBots ? 'Loading bots…' : 'Select Bot...'}</option>
                {bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
              </select>
              <Input 
+               aria-label="Search query"
                className="flex-1" 
                placeholder="Search query..." 
                value={query} 
@@ -283,12 +306,14 @@ function RagTab({ bots }: { bots: Bot[] }) {
       {result && (
         <div className="space-y-4 max-w-4xl">
           <p className="text-sm font-medium">Found {result.results.length} chunks</p>
-          {result.results.map((r: any, i: number) => (
+          {result.results.map((r, i) => (
             <Card key={i}>
               <CardBody>
                 <div className="flex justify-between items-start mb-2">
                   <Badge variant="info">Score: {r.score.toFixed(4)}</Badge>
-                  {r.metadata?.category && <span className="text-xs text-muted-foreground">{r.metadata.category}</span>}
+                  {typeof r.metadata?.category === 'string' && (
+                    <span className="text-xs text-muted-foreground">{r.metadata.category}</span>
+                  )}
                 </div>
                 <p className="text-sm whitespace-pre-wrap">{r.content}</p>
               </CardBody>
@@ -300,22 +325,22 @@ function RagTab({ bots }: { bots: Bot[] }) {
   );
 }
 
-function PipelineTab({ bots }: { bots: Bot[] }) {
+function PipelineTab({ bots, loadingBots }: { bots: Bot[]; loadingBots: boolean }) {
   const [botId, setBotId] = useState('');
   const [question, setQuestion] = useState('');
   const [loading, setLoading] = useState(false);
-  const [result, setResult] = useState<any>(null);
+  const [result, setResult] = useState<PipelineDebugResponse | null>(null);
   const { toast } = useToast();
 
-  async function handleRun(e: React.FormEvent) {
+  async function handleRun(e: FormEvent) {
     e.preventDefault();
     if (!botId || !question.trim()) return;
     setLoading(true);
     try {
       const res = await debugPipeline({ bot_id: botId, message: question });
       setResult(res);
-    } catch (err: any) {
-      toast(err.message || 'Pipeline debug failed', 'error');
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Pipeline debug failed', 'error');
     } finally {
       setLoading(false);
     }
@@ -327,15 +352,18 @@ function PipelineTab({ bots }: { bots: Bot[] }) {
          <form onSubmit={handleRun} className="space-y-4">
            <div className="flex gap-4">
              <select 
-               className="h-9 rounded-lg border border-border bg-background px-3 text-sm focus:border-accent focus:outline-none w-64"
+               aria-label="Bot"
+               className="h-9 w-64 rounded-lg border border-border bg-background px-3 text-sm focus:border-accent focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
                value={botId}
                onChange={(e) => setBotId(e.target.value)}
+               disabled={loadingBots}
                required
              >
-               <option value="">Select Bot...</option>
+               <option value="">{loadingBots ? 'Loading bots…' : 'Select Bot...'}</option>
                {bots.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
              </select>
              <Input 
+               aria-label="User question"
                className="flex-1" 
                placeholder="User question..." 
                value={question} 
@@ -371,7 +399,6 @@ function PipelineTab({ bots }: { bots: Bot[] }) {
             icon={<MessageSquare className="h-4 w-4" />}
             title="4. Final Response"
             data={result.final_result}
-            isLast
           />
         </div>
       )}
@@ -379,7 +406,15 @@ function PipelineTab({ bots }: { bots: Bot[] }) {
   );
 }
 
-function PipelineStep({ icon, title, data, isLast }: { icon: any; title: string; data: any; isLast?: boolean }) {
+function PipelineStep({
+  icon,
+  title,
+  data,
+}: {
+  icon: ReactNode;
+  title: string;
+  data: unknown;
+}) {
   return (
     <div className="relative z-10 flex gap-4">
       <div className="mt-1 h-10 w-10 shrink-0 rounded-full bg-background border-2 border-border flex items-center justify-center shadow-sm">
@@ -402,7 +437,7 @@ function PipelineStep({ icon, title, data, isLast }: { icon: any; title: string;
 }
 
 function MlEvalTab() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<MlEvaluationResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const { toast } = useToast();
 
@@ -411,8 +446,8 @@ function MlEvalTab() {
     try {
       const res = await evaluateMl();
       setData(res);
-    } catch (err: any) {
-      toast(err.message || 'Evaluation failed', 'error');
+    } catch (err) {
+      toast(err instanceof ApiError ? err.message : 'Evaluation failed', 'error');
     } finally {
       setLoading(false);
     }
@@ -464,7 +499,7 @@ function MetricCard({ label, value }: { label: string; value: number }) {
 }
 
 function VectorTab() {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<VectorStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {

@@ -14,32 +14,48 @@
   --gray-900: #111827;
   --gray-950: #030712;
 
-  /* Accent */
-  --accent-50: #eef2ff;
-  --accent-100: #e0e7ff;
-  --accent-200: #c7d2fe;
-  --accent-400: #818cf8;
-  --accent-500: #6366f1;
-  --accent-600: #4f46e5;
-  --accent-700: #4338ca;
+  /* Accent — AssistIQ orange */
+  --accent-50: #fff3ed;
+  --accent-100: #ffe4d4;
+  --accent-200: #ffcdb2;
+  --accent-400: #ff8c5a;
+  --accent-500: #ff6b35;
+  --accent-600: #e55a2b;
+  --accent-700: #cc4a1e;
+  /* Deeper shade so orange text/icons keep AA contrast on white and on --accent-50. */
+  --accent-800: #a63c15;
+  --accent-strong: var(--accent-700);
 
   /* Status */
+  --green-50: #f0fdf4;
+  --green-400: #4ade80;
   --green-500: #22c55e;
   --green-600: #16a34a;
-  --green-50: #f0fdf4;
+  --green-700: #15803d;
+  --red-50: #fef2f2;
+  --red-400: #f87171;
   --red-500: #ef4444;
   --red-600: #dc2626;
-  --red-50: #fef2f2;
-  --amber-500: #f59e0b;
   --amber-50: #fffbeb;
-  --blue-500: #3b82f6;
+  --amber-400: #fbbf24;
+  --amber-500: #f59e0b;
+  --amber-600: #d97706;
+  --amber-700: #b45309;
   --blue-50: #eff6ff;
+  --blue-400: #60a5fa;
+  --blue-500: #3b82f6;
+  --blue-600: #2563eb;
 
   /* Theme tokens */
   --background: #ffffff;
+  /* Warm stone, not yellow cream: the sheet needs a quiet ground without
+     reading as an assistant-brand cream. */
+  --ground: #f6f6f4;
   --foreground: var(--gray-900);
   --muted: var(--gray-100);
-  --muted-foreground: var(--gray-500);
+  /* Gray 600, not 500: 500 lands at 4.47:1 on the warm ground and fails AA
+     for normal text. 600 keeps secondary copy readable on every light surface. */
+  --muted-foreground: var(--gray-600);
   --border: var(--gray-200);
   --card: #ffffff;
   --card-foreground: var(--gray-900);
@@ -47,14 +63,28 @@
   --sidebar-foreground: var(--gray-700);
   --sidebar-border: var(--gray-200);
   --sidebar-active: var(--accent-50);
-  --sidebar-active-foreground: var(--accent-700);
+  --sidebar-active-foreground: var(--accent-800);
+
+  /* Semantic surfaces — every tinted background and its readable foreground.
+     Components use these instead of composing palette colours inline, so a
+     theme change (light/dark) stays in one place. */
+  --accent-bg: var(--accent-50);
+  --accent-bg-foreground: var(--accent-800);
+  --error-bg: var(--red-50);
+  --error-bg-foreground: var(--red-700);
+  --success-bg: var(--green-50);
+  --success-bg-foreground: var(--green-700);
+  --warning-bg: var(--amber-50);
+  --warning-bg-foreground: var(--amber-700);
+  --info-bg: var(--blue-50);
+  --info-bg-foreground: var(--blue-600);
 
   /* Checkpoint 8 — the minimum extra tokens the configuration center needs. Each is a
      token reference, never a literal, so a future global theme change flows through. */
   --overlay: color-mix(in srgb, var(--gray-950) 40%, transparent);
   --info: var(--blue-500);
   --info-foreground: #ffffff;
-  --success-muted: var(--green-50);
+  --success-muted: var(--success-bg);
   --warning-foreground: var(--gray-900);
   --disabled: var(--gray-100);
 
@@ -65,6 +95,7 @@
 @media (prefers-color-scheme: dark) {
   :root {
     --background: var(--gray-950);
+    --ground: var(--gray-950);
     --foreground: var(--gray-100);
     --muted: var(--gray-800);
     --muted-foreground: var(--gray-400);
@@ -74,12 +105,23 @@
     --sidebar: var(--gray-900);
     --sidebar-foreground: var(--gray-300);
     --sidebar-border: var(--gray-800);
-    --sidebar-active: color-mix(in srgb, var(--accent-600) 15%, transparent);
+    --sidebar-active: color-mix(in srgb, var(--accent-500) 18%, transparent);
     --sidebar-active-foreground: var(--accent-400);
+    --accent-strong: var(--accent-400);
+    --accent-bg: color-mix(in srgb, var(--accent-500) 18%, transparent);
+    --accent-bg-foreground: var(--accent-400);
+    --error-bg: color-mix(in srgb, var(--red-600) 15%, transparent);
+    --error-bg-foreground: var(--red-400);
+    --success-bg: color-mix(in srgb, var(--green-600) 15%, transparent);
+    --success-bg-foreground: var(--green-400);
+    --warning-bg: color-mix(in srgb, var(--amber-500) 15%, transparent);
+    --warning-bg-foreground: var(--amber-400);
+    --info-bg: color-mix(in srgb, var(--blue-500) 15%, transparent);
+    --info-bg-foreground: var(--blue-400);
     --overlay: color-mix(in srgb, var(--gray-950) 60%, transparent);
     --info: var(--blue-500);
     --info-foreground: var(--gray-950);
-    --success-muted: color-mix(in srgb, var(--green-600) 15%, transparent);
+    --success-muted: var(--success-bg);
     --warning-foreground: var(--gray-100);
     --disabled: var(--gray-800);
   }
@@ -87,6 +129,7 @@
 
 @theme inline {
   --color-background: var(--background);
+  --color-ground: var(--ground);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-muted-foreground: var(--muted-foreground);
@@ -99,12 +142,25 @@
   --color-sidebar-active: var(--sidebar-active);
   --color-sidebar-active-foreground: var(--sidebar-active-foreground);
   --color-accent: var(--accent-500);
-  --color-accent-foreground: #ffffff;
+  --color-accent-strong: var(--accent-strong);
+  --color-accent-foreground: var(--gray-950);
   --color-destructive: var(--red-600);
   --color-destructive-foreground: #ffffff;
   --color-success: var(--green-600);
   --color-success-foreground: #ffffff;
   --color-warning: var(--amber-500);
+
+  /* Semantic tinted surfaces — generate `bg-*-bg` and `text-*-bg-foreground`. */
+  --color-accent-bg: var(--accent-bg);
+  --color-accent-bg-foreground: var(--accent-bg-foreground);
+  --color-error-bg: var(--error-bg);
+  --color-error-bg-foreground: var(--error-bg-foreground);
+  --color-success-bg: var(--success-bg);
+  --color-success-bg-foreground: var(--success-bg-foreground);
+  --color-warning-bg: var(--warning-bg);
+  --color-warning-bg-foreground: var(--warning-bg-foreground);
+  --color-info-bg: var(--info-bg);
+  --color-info-bg-foreground: var(--info-bg-foreground);
 
   /* Checkpoint 8 — new semantic tokens, mapped so they generate utilities. */
   --color-overlay: var(--overlay);

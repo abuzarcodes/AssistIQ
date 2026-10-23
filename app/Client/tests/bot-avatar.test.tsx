@@ -16,7 +16,7 @@ vi.mock('@/lib/api/botConfig', () => ({
 }));
 
 const { BotAvatar } = await import(
-  '@/app/dashboard/bots/[botId]/_components/bot-avatar'
+  '@/app/w/[workspaceId]/bots/[botId]/_components/bot-avatar'
 );
 
 beforeEach(() => {

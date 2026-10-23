@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { BusinessHoursEditor } from '@/app/dashboard/bots/[botId]/_components/business-hours-editor';
+import { BusinessHoursEditor } from '@/app/w/[workspaceId]/bots/[botId]/_components/business-hours-editor';
 import type { BusinessHours } from '@/lib/api/botConfig';
 
 /**

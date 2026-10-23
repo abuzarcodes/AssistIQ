@@ -26,7 +26,7 @@ vi.mock('@/lib/api/botConfig', () => ({
 vi.mock('@/lib/api/bots', () => ({ updateBot: vi.fn(), assignBotModel: vi.fn() }));
 
 const { BotConfigTabs } = await import(
-  '@/app/dashboard/bots/[botId]/_components/bot-config-tabs'
+  '@/app/w/[workspaceId]/bots/[botId]/_components/bot-config-tabs'
 );
 
 const config: ResolvedBotConfig = {
