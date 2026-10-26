@@ -1,6 +1,14 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
+
+/* Theme is chosen in the profile menu, not by the operating system alone. The
+   `dark` variant follows the class the theme provider puts on <html>, so every
+   `dark:` utility switches with the same control. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 :root {
+  color-scheme: light;
+
   /* Neutral palette */
   --gray-50: #f9fafb;
   --gray-100: #f3f4f6;
@@ -13,6 +21,19 @@
   --gray-800: #1f2937;
   --gray-900: #111827;
   --gray-950: #030712;
+
+  /* Neutral dark ramp. The gray ramp above carries a blue cast that turns every
+     large dark surface into blue-gray. Dark mode uses this equal-channel ramp so
+     the page reads as black; light mode stays on --gray-*. */
+  --neutral-1000: #000000;
+  --neutral-950: #0a0a0a;
+  --neutral-900: #141414;
+  --neutral-800: #262626;
+  --neutral-700: #3f3f3f;
+  --neutral-600: #525252;
+  --neutral-400: #a3a3a3;
+  --neutral-300: #d4d4d4;
+  --neutral-100: #f5f5f5;
 
   /* Accent — AssistIQ orange */
   --accent-50: #fff3ed;
@@ -92,39 +113,41 @@
   --radius-lg: 12px;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: var(--gray-950);
-    --ground: var(--gray-950);
-    --foreground: var(--gray-100);
-    --muted: var(--gray-800);
-    --muted-foreground: var(--gray-400);
-    --border: var(--gray-800);
-    --card: var(--gray-900);
-    --card-foreground: var(--gray-100);
-    --sidebar: var(--gray-900);
-    --sidebar-foreground: var(--gray-300);
-    --sidebar-border: var(--gray-800);
-    --sidebar-active: color-mix(in srgb, var(--accent-500) 18%, transparent);
-    --sidebar-active-foreground: var(--accent-400);
-    --accent-strong: var(--accent-400);
-    --accent-bg: color-mix(in srgb, var(--accent-500) 18%, transparent);
-    --accent-bg-foreground: var(--accent-400);
-    --error-bg: color-mix(in srgb, var(--red-600) 15%, transparent);
-    --error-bg-foreground: var(--red-400);
-    --success-bg: color-mix(in srgb, var(--green-600) 15%, transparent);
-    --success-bg-foreground: var(--green-400);
-    --warning-bg: color-mix(in srgb, var(--amber-500) 15%, transparent);
-    --warning-bg-foreground: var(--amber-400);
-    --info-bg: color-mix(in srgb, var(--blue-500) 15%, transparent);
-    --info-bg-foreground: var(--blue-400);
-    --overlay: color-mix(in srgb, var(--gray-950) 60%, transparent);
-    --info: var(--blue-500);
-    --info-foreground: var(--gray-950);
-    --success-muted: var(--success-bg);
-    --warning-foreground: var(--gray-100);
-    --disabled: var(--gray-800);
-  }
+.dark {
+  color-scheme: dark;
+
+  /* True black ground with near-black raised surfaces. Keeping the steps neutral
+     means the interface stays black at every layer instead of drifting blue. */
+  --background: var(--neutral-1000);
+  --ground: var(--neutral-1000);
+  --foreground: var(--neutral-100);
+  --muted: var(--neutral-900);
+  --muted-foreground: var(--neutral-400);
+  --border: var(--neutral-800);
+  --card: var(--neutral-950);
+  --card-foreground: var(--neutral-100);
+  --sidebar: #050505;
+  --sidebar-foreground: var(--neutral-300);
+  --sidebar-border: #1c1c1c;
+  --sidebar-active: color-mix(in srgb, var(--accent-500) 18%, transparent);
+  --sidebar-active-foreground: var(--accent-400);
+  --accent-strong: var(--accent-400);
+  --accent-bg: color-mix(in srgb, var(--accent-500) 18%, transparent);
+  --accent-bg-foreground: var(--accent-400);
+  --error-bg: color-mix(in srgb, var(--red-600) 15%, transparent);
+  --error-bg-foreground: var(--red-400);
+  --success-bg: color-mix(in srgb, var(--green-600) 15%, transparent);
+  --success-bg-foreground: var(--green-400);
+  --warning-bg: color-mix(in srgb, var(--amber-500) 15%, transparent);
+  --warning-bg-foreground: var(--amber-400);
+  --info-bg: color-mix(in srgb, var(--blue-500) 15%, transparent);
+  --info-bg-foreground: var(--blue-400);
+  --overlay: color-mix(in srgb, var(--neutral-1000) 70%, transparent);
+  --info: var(--blue-500);
+  --info-foreground: var(--neutral-1000);
+  --success-muted: var(--success-bg);
+  --warning-foreground: var(--neutral-100);
+  --disabled: var(--neutral-900);
 }
 
 @theme inline {
@@ -196,10 +219,9 @@ body {
   border-radius: 3px;
 }
 
-@media (prefers-color-scheme: dark) {
-  ::-webkit-scrollbar-thumb {
-    background: var(--gray-700);
-  }
+.dark ::-webkit-scrollbar-thumb,
+.dark::-webkit-scrollbar-thumb {
+  background: var(--neutral-700);
 }
 
 /* Focus ring */

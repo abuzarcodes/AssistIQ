@@ -8,10 +8,10 @@ import {
   FlaskConical,
   Shield,
   Cpu,
-  LogOut,
   Menu,
   X,
 } from "lucide-react";
+import { AccountMenu } from "@/components/account-menu";
 import { useAuth } from "@/lib/auth-context";
 import {
   PLATFORM_PERMISSIONS,
@@ -64,7 +64,7 @@ const navItems: {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { user, logout, hasPermission } = useAuth();
+  const { hasPermission } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -166,33 +166,12 @@ export function Sidebar() {
         })}
       </nav>
 
-      <div className="border-t border-sidebar-border px-4 py-3">
-        <div className="flex items-center gap-2.5 mb-2">
-          <div className="h-7 w-7 rounded-full bg-muted flex items-center justify-center">
-            <span className="text-xs font-medium text-muted-foreground">
-              {user?.name?.charAt(0)?.toUpperCase() || "?"}
-            </span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-medium text-foreground truncate">
-              {user?.name}
-            </p>
-            <p className="text-xs text-muted-foreground truncate">
-              {user?.email}
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={async () => {
-            await logout();
-            setMobileOpen(false);
-          }}
-          className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 cursor-pointer"
-        >
-          <LogOut aria-hidden="true" className="h-3.5 w-3.5" />
-          Sign out
-        </button>
+      <div className="border-t border-sidebar-border px-3 py-3">
+        <AccountMenu
+          variant="sidebar"
+          onNavigate={() => setMobileOpen(false)}
+          showWorkspaceLinks={false}
+        />
       </div>
     </>
   );

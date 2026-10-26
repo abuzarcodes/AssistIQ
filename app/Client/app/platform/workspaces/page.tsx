@@ -5,6 +5,7 @@ import { FolderOpen } from 'lucide-react';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/page-header';
 import { listPlatformWorkspaces, type PlatformWorkspace } from '@/lib/api/platform';
 
 export default function PlatformWorkspacesPage() {
@@ -22,12 +23,10 @@ export default function PlatformWorkspacesPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-foreground">Workspaces</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Every tenant on the platform, including ones you are not a member of.
-        </p>
-      </div>
+      <PageHeader
+        title="Workspaces"
+        description="Every tenant on the platform, including ones you are not a member of."
+      />
 
       <Card>
         <CardHeader>

@@ -6,6 +6,7 @@ import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
+import { PageHeader } from '@/components/page-header';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api-client';
 import {
@@ -213,9 +214,7 @@ export default function PlatformSettingsPage() {
   if (!settings || !values) {
     return (
       <div className="animate-fade-in">
-        <div className="mb-6">
-          <h1 className="text-lg font-semibold text-foreground">Settings</h1>
-        </div>
+        <PageHeader title="Settings" />
         <Card>
           <CardBody>
             <p className="text-sm text-muted-foreground">
@@ -229,13 +228,10 @@ export default function PlatformSettingsPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-foreground">Settings</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Upload limits enforced across every workspace. Changes take effect on the next
-          upload, with no restart.
-        </p>
-      </div>
+      <PageHeader
+        title="Settings"
+        description="Upload limits enforced across every workspace. Changes take effect on the next upload, with no restart."
+      />
 
       <form onSubmit={handleSave}>
         <Card>

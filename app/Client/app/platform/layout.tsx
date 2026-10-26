@@ -2,7 +2,7 @@
 
 import { AuthGuard } from '@/components/auth-guard';
 import { PlatformGuard } from '@/components/platform-guard';
-import { AppShell } from '@/components/app-shell';
+import { PlatformShell } from '@/components/platform-shell';
 import type { ReactNode } from 'react';
 
 /**
@@ -10,13 +10,15 @@ import type { ReactNode } from 'react';
  *
  * Two gates, outermost first: `AuthGuard` resolves the session, then `PlatformGuard`
  * requires a PLATFORM_OWNER. They are kept separate so the platform gate never has to
- * reason about a half-loaded session.
+ * reason about a half-loaded session. The shell is the same navigation language as the
+ * workspace area, so following a platform link does not drop the owner into the legacy
+ * dashboard chrome.
  */
 export default function PlatformLayout({ children }: { children: ReactNode }) {
   return (
     <AuthGuard>
       <PlatformGuard>
-        <AppShell>{children}</AppShell>
+        <PlatformShell>{children}</PlatformShell>
       </PlatformGuard>
     </AuthGuard>
   );

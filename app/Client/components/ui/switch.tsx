@@ -46,7 +46,7 @@ export function Switch({
       <span
         aria-hidden
         className={`pointer-events-none flex h-5 w-9 items-center rounded-full p-0.5 transition-colors ${
-          checked ? 'bg-accent' : 'bg-[var(--gray-300)] dark:bg-[var(--gray-600)]'
+          checked ? 'bg-accent' : 'bg-[var(--gray-300)] dark:bg-[var(--neutral-700)]'
         } ${disabled ? 'opacity-50' : ''}`}
       >
         <span

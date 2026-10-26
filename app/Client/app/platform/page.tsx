@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { Users, FolderOpen, Activity, FlaskConical, Cpu, ArrowRight, SlidersHorizontal } from 'lucide-react';
 import { Card, CardBody } from '@/components/ui/card';
+import { PageHeader } from '@/components/page-header';
 
 /**
  * Platform administration overview.
@@ -52,12 +53,10 @@ const sections = [
 export default function PlatformPage() {
   return (
     <div className="animate-fade-in">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-foreground">Platform administration</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Cross-tenant views reserved for platform owners.
-        </p>
-      </div>
+      <PageHeader
+        title="Platform administration"
+        description="Cross-tenant views reserved for platform owners."
+      />
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {sections.map(({ href, label, description, icon: Icon }) => (

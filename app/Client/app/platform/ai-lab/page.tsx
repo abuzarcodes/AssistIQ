@@ -40,6 +40,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Spinner } from '@/components/ui/spinner';
 import { Badge } from '@/components/ui/badge';
+import { PageHeader } from '@/components/page-header';
 import { useToast } from '@/components/ui/toast';
 
 export default function AiLabPage() {
@@ -81,17 +82,15 @@ export default function AiLabPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-6 flex items-center gap-3">
-        <div className="h-10 w-10 rounded-xl bg-accent flex items-center justify-center shadow-sm">
-          <FlaskConical className="h-5 w-5 text-accent-foreground" />
-        </div>
-        <div>
-          <h1 className="text-xl font-semibold text-foreground tracking-tight">AI Lab</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Test and evaluate the underlying ML and AI models.
-          </p>
-        </div>
-      </div>
+      <PageHeader
+        title="AI Lab"
+        description="Test and evaluate the underlying ML and AI models."
+        leading={
+          <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-accent text-accent-foreground">
+            <FlaskConical className="h-5 w-5" />
+          </span>
+        }
+      />
 
       <Card>
         <CardBody className="p-0">

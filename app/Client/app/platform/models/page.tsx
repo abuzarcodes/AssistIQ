@@ -10,6 +10,7 @@ import { Select } from '@/components/ui/select';
 import { Dialog } from '@/components/ui/dialog';
 import { Spinner } from '@/components/ui/spinner';
 import { EmptyState } from '@/components/ui/empty-state';
+import { PageHeader } from '@/components/page-header';
 import { useToast } from '@/components/ui/toast';
 import { ApiError } from '@/lib/api-client';
 import {
@@ -256,18 +257,20 @@ export default function PlatformModelsPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="flex items-start justify-between mb-6 gap-4">
-        <div>
-          <h1 className="text-lg font-semibold text-foreground">Models</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Manage which AI models are available to workspaces.
-          </p>
-        </div>
-        <Button size="sm" onClick={() => setAddOpen(true)} disabled={providers.length === 0}>
-          <Plus className="h-3.5 w-3.5" />
-          Add model
-        </Button>
-      </div>
+      <PageHeader
+        title="Models"
+        description="Manage which AI models are available to workspaces."
+        action={
+          <Button
+            size="sm"
+            onClick={() => setAddOpen(true)}
+            disabled={providers.length === 0}
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add model
+          </Button>
+        }
+      />
 
       {loading ? (
         <div className="flex justify-center py-12">

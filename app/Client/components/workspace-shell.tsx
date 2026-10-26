@@ -16,13 +16,13 @@ import {
   FlaskConical,
   Inbox,
   LayoutDashboard,
-  LogOut,
   Menu,
   Shield,
   Sparkles,
   X,
   type LucideIcon,
 } from 'lucide-react';
+import { AccountMenu } from '@/components/account-menu';
 import { Breadcrumbs, type BreadcrumbSegment } from '@/components/breadcrumbs';
 import { WorkspaceSwitcher } from '@/components/workspace-switcher';
 import { Button } from '@/components/ui/button';
@@ -30,10 +30,6 @@ import { useAuth } from '@/lib/auth-context';
 import { PLATFORM_PERMISSIONS } from '@/lib/permissions';
 import { useWorkspace } from '@/lib/workspace-context';
 import type { WorkspaceDetail } from '@/lib/api/workspaces';
-
-function initialOf(value: string) {
-  return value.trim().charAt(0).toUpperCase() || '?';
-}
 
 export function WorkspaceShell({ children }: { children: ReactNode }) {
   const { workspace, workspaceId, error, reload, pageBreadcrumbs } =
@@ -228,9 +224,7 @@ function SidebarContent({
   pathname: string;
   onNavigate?: () => void;
 }) {
-  const { user, isPlatformOwner, hasPermission, logout } = useAuth();
-  const router = useRouter();
-  const [signingOut, setSigningOut] = useState(false);
+  const { isPlatformOwner, hasPermission } = useAuth();
 
   const base = `/w/${workspaceId}`;
   const isDashboard = pathname === base;
@@ -238,14 +232,6 @@ function SidebarContent({
     pathname === `${base}/bots` || pathname.startsWith(`${base}/bots/`);
   const isInbox =
     pathname === `${base}/inbox` || pathname.startsWith(`${base}/inbox/`);
-
-  async function handleSignOut() {
-    if (signingOut) return;
-    setSigningOut(true);
-    onNavigate?.();
-    await logout();
-    router.replace('/login');
-  }
 
   return (
     <div className="flex h-full flex-col bg-card">
@@ -361,31 +347,11 @@ function SidebarContent({
       </nav>
 
       <div className="shrink-0 border-t border-border p-3">
-        <div className="flex items-center gap-2.5 px-1 pb-2">
-          <span
-            aria-hidden="true"
-            className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-accent-bg text-xs font-semibold text-accent-bg-foreground"
-          >
-            {initialOf(user?.name ?? '')}
-          </span>
-          <div className="min-w-0">
-            <p className="truncate text-[13px] font-medium text-foreground">
-              {user?.name}
-            </p>
-            <p className="truncate text-[11px] text-muted-foreground">
-              {user?.email}
-            </p>
-          </div>
-        </div>
-        <button
-          type="button"
-          onClick={() => void handleSignOut()}
-          disabled={signingOut}
-          className="flex h-8 w-full items-center gap-2.5 rounded-lg px-2 text-[13px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          <LogOut aria-hidden="true" className="h-4 w-4" />
-          {signingOut ? 'Signing out…' : 'Sign out'}
-        </button>
+        <AccountMenu
+          variant="sidebar"
+          onNavigate={onNavigate}
+          showWorkspaceLinks={false}
+        />
       </div>
     </div>
   );

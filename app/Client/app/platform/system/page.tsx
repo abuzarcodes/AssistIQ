@@ -5,6 +5,7 @@ import { Activity, Database, Server } from 'lucide-react';
 import { Card, CardBody, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Spinner } from '@/components/ui/spinner';
+import { PageHeader } from '@/components/page-header';
 import { getPlatformSystemStatus, type PlatformSystemStatus } from '@/lib/api/platform';
 
 export default function PlatformSystemPage() {
@@ -22,13 +23,10 @@ export default function PlatformSystemPage() {
 
   return (
     <div className="animate-fade-in">
-      <div className="mb-6">
-        <h1 className="text-lg font-semibold text-foreground">System</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          Platform health. The AI service probe is reported as reachable or not rather than
-          failing the whole page.
-        </p>
-      </div>
+      <PageHeader
+        title="System"
+        description="Platform health. The AI service probe is reported as reachable or not rather than failing the whole page."
+      />
 
       {loading ? (
         <div className="flex justify-center py-12">
