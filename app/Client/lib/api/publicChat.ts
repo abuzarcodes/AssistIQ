@@ -1,4 +1,5 @@
 import type { MessageRole, SourceRef, EscalationInfo } from './conversations';
+import type { ExperienceConfigSnapshot } from './experience';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
 
@@ -223,5 +224,69 @@ export function recoverPublicMessages(
     `/public/conversations/${conversationId}/messages?${query.toString()}`,
     { method: 'GET' },
     visitorToken,
+  );
+}
+
+/**
+ * The published deployment payload (Phase 11).
+ *
+ * Everything a public chat needs and nothing it must not have: the deployment's
+ * identity, the bot's public name, and the published experience snapshot. Fields
+ * the business left empty stay null — the chat fills them with its own defaults,
+ * exactly like the studio's fallback display.
+ */
+export interface PublishedDeploymentPayload {
+  deployment: {
+    id: string;
+    botId: string;
+    workspaceId: string;
+    format: 'HOSTED_PAGE' | 'WIDGET' | 'IFRAME';
+    status: 'DRAFT' | 'PUBLISHED' | 'UNPUBLISHED';
+    slug: string | null;
+    publishEpoch: number;
+    allowedDomains: string[];
+  };
+  bot: {
+    id: string;
+    name: string;
+  };
+  config: ExperienceConfigSnapshot;
+}
+
+export type DeploymentClientEventType = 'page_view' | 'chat_start';
+
+/** GET /api/v1/public/deployments/slug/:slug/config — hosted page entry point. */
+export function getPublishedConfigBySlug(slug: string) {
+  return publicFetch<PublishedDeploymentPayload>(
+    `/public/deployments/slug/${encodeURIComponent(slug)}/config`,
+    { method: 'GET' },
+  );
+}
+
+/** GET /api/v1/public/deployments/:deploymentId/config — embed entry point. */
+export function getPublishedConfigByDeploymentId(deploymentId: string) {
+  return publicFetch<PublishedDeploymentPayload>(
+    `/public/deployments/${encodeURIComponent(deploymentId)}/config`,
+    { method: 'GET' },
+  );
+}
+
+/**
+ * POST /api/v1/public/deployments/:deploymentId/events — client analytics event.
+ *
+ * Fire-and-forget from the chat's perspective: the caller catches every failure
+ * so a blocked analytics request can never break the conversation.
+ */
+export function recordDeploymentEvent(
+  deploymentId: string,
+  event: {
+    eventType: DeploymentClientEventType;
+    sessionId?: string;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  return publicFetch<{ recorded: boolean }>(
+    `/public/deployments/${encodeURIComponent(deploymentId)}/events`,
+    { method: 'POST', body: JSON.stringify(event) },
   );
 }

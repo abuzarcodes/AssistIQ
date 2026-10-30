@@ -38,9 +38,12 @@ const toCursor = (query: MessageCursorQueryInput) =>
  * security boundary rather than a formatting choice.
  */
 
-/** POST /public/bots/:botId/conversations — start a session (§10.3). */
 export const startConversation = asyncHandler(async (req: Request, res: Response) => {
-  const result = await conversationService.startPublicConversation(req.params.botId);
+  const deploymentId =
+    typeof req.body === 'object' && req.body && typeof req.body.deploymentId === 'string'
+      ? req.body.deploymentId
+      : undefined;
+  const result = await conversationService.startPublicConversation(req.params.botId, deploymentId);
 
   // `sessionSecret` is present in this response and nowhere else, ever again.
   sendSuccess(

@@ -84,6 +84,20 @@ const seedWorkspace = async () => {
     data: { name: `Bot ${unique()}`, workspaceId: workspace.id },
   });
 
+  const exp = await prisma.botExperience.create({
+    data: { botId: bot.id },
+  });
+  await prisma.botDeployment.create({
+    data: {
+      experienceId: exp.id,
+      botId: bot.id,
+      workspaceId: workspace.id,
+      format: 'WIDGET',
+      status: 'PUBLISHED',
+      enabled: true,
+    },
+  });
+
   return { workspace, bot, owner, agentA, agentB, agentC };
 };
 

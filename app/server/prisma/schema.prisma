@@ -56,6 +56,7 @@ model User {
   assignedConversations Conversation[]      @relation("AssignedConversations")
   conversationEvents    ConversationEvent[]
   authoredMessages      Message[]           @relation("AuthoredMessages")
+  publishedVersions     BotExperienceVersion[]
 
   @@map("users")
 }
@@ -129,6 +130,8 @@ model Bot {
   /// 1:1 bot configuration (§9). Absent row == every documented default, which is why no
   /// backfill is needed and why "reset to recommended" is a delete-shaped operation.
   configuration BotConfiguration?
+  /// 1:1 bot experience configuration for Bot Experience Studio
+  experience    BotExperience?
 
   @@index([workspaceId])
   @@index([aiModelId])
@@ -214,12 +217,14 @@ model Conversation {
   /// ever returned once, at conversation creation; this column is what `/refresh` checks.
   /// Null for conversations that have no public visitor session (e.g. dashboard-created).
   visitorSessionHash String?            @db.VarChar(64)
+  deploymentId       String?
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
 
   bot              Bot                  @relation(fields: [botId], references: [id], onDelete: Cascade)
   workspace        Workspace            @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   assignedAgent    User?                @relation("AssignedConversations", fields: [assignedAgentId], references: [id], onDelete: SetNull)
+  deployment       BotDeployment?       @relation(fields: [deploymentId], references: [id], onDelete: SetNull)
   messages         Message[]
   /// Contact details a customer supplied for this conversation (§14.6). Deliberately not
   /// a Customer entity — AssistIQ has no end-user identity system.
@@ -228,6 +233,7 @@ model Conversation {
   events           ConversationEvent[]
 
   @@index([botId])
+  @@index([deploymentId])
   /// Serves the queue views, which always scope by workspace and filter by status.
   @@index([workspaceId, status])
   /// Serves "my assigned" and the unassigned-queue predicate.
@@ -652,4 +658,147 @@ model ConversationContact {
   conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
 
   @@map("conversation_contacts")
+}
+
+// -----------------------------------------------------------------------------
+// Bot Experience Studio Models
+// -----------------------------------------------------------------------------
+
+enum DeploymentFormat {
+  HOSTED_PAGE
+  WIDGET
+  IFRAME
+}
+
+enum DeploymentStatus {
+  DRAFT
+  PUBLISHED
+  UNPUBLISHED
+}
+
+model BotExperience {
+  id    String @id @default(uuid())
+  botId String @unique
+
+  // --- Branding ---
+  displayName       String?  @db.VarChar(60)
+  botAvatarUrl      String?  @db.VarChar(500)
+  businessLogoUrl   String?  @db.VarChar(500)
+  accentColor       String   @default("#ff6b35") @db.VarChar(9)
+  userBubbleColor   String?  @db.VarChar(9)
+  botBubbleColor    String?  @db.VarChar(9)
+  themeMode         String   @default("system") @db.VarChar(10) // light | dark | system
+  themePreset       String?  @db.VarChar(20) // minimal | professional | friendly | dark
+
+  // --- Layout ---
+  hostedPageTitle       String?  @db.VarChar(120)
+  hostedPageDescription String?  @db.VarChar(500)
+  widgetPosition        String   @default("bottom-right") @db.VarChar(20)
+  widgetLauncherLabel   String?  @db.VarChar(40)
+  widgetPanelWidth      Int      @default(400)
+  widgetPanelHeight     Int      @default(600)
+  widgetMobileBehavior  String   @default("fullscreen") @db.VarChar(20)
+  iframeWidth           String   @default("100%") @db.VarChar(20)
+  iframeHeight          String   @default("600px") @db.VarChar(20)
+
+  // --- Welcome ---
+  welcomeMessage        String?  @db.VarChar(500)
+  welcomeSubtitle       String?  @db.VarChar(200)
+  inputPlaceholder      String?  @db.VarChar(120)
+  suggestedQuestions    Json     @default("[]") // string[]
+  firstOpenBehavior     String   @default("welcome") @db.VarChar(20)
+
+  // --- Chat Behavior ---
+  showTimestamps        Boolean  @default(true)
+  autoOpen              Boolean  @default(false)
+  privacyPolicyUrl      String?  @db.VarChar(500)
+  termsUrl              String?  @db.VarChar(500)
+  showBranding          Boolean  @default(true)
+
+  // --- Meta ---
+  publishedVersionId String?
+  version            Int      @default(1) // optimistic concurrency
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  bot              Bot                    @relation(fields: [botId], references: [id], onDelete: Cascade)
+  publishedVersion BotExperienceVersion?  @relation("PublishedVersion", fields: [publishedVersionId], references: [id], onDelete: SetNull)
+  versions         BotExperienceVersion[] @relation("ExperienceVersions")
+  deployments      BotDeployment[]
+
+  @@map("bot_experiences")
+}
+
+model BotExperienceVersion {
+  id            String   @id @default(uuid())
+  experienceId  String
+  versionNumber Int
+  config        Json     // Complete snapshot of all experience settings at publish time
+  publishedAt   DateTime @default(now())
+  publishedBy   String   // userId who published
+
+  experience   BotExperience   @relation("ExperienceVersions", fields: [experienceId], references: [id], onDelete: Cascade)
+  activeFor    BotExperience[] @relation("PublishedVersion")
+  publisher    User            @relation(fields: [publishedBy], references: [id], onDelete: Restrict)
+
+  @@unique([experienceId, versionNumber])
+  @@index([experienceId])
+  @@map("bot_experience_versions")
+}
+
+model BotDeployment {
+  id           String           @id @default(uuid())
+  experienceId String
+  botId        String           // Denormalized for efficient public lookups
+  workspaceId  String           // Denormalized for tenant queries
+  format       DeploymentFormat
+  status       DeploymentStatus @default(DRAFT)
+  slug         String?          @unique @db.VarChar(80)
+  enabled      Boolean          @default(true)
+
+  // --- Unpublish tracking ---
+  unpublishedAt DateTime?
+  publishEpoch  Int       @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  experience    BotExperience      @relation(fields: [experienceId], references: [id], onDelete: Cascade)
+  domains       DeploymentDomain[]
+  conversations Conversation[]
+
+  @@unique([experienceId, format])
+  @@index([botId])
+  @@index([slug])
+  @@index([status])
+  @@map("bot_deployments")
+}
+
+model DeploymentDomain {
+  id           String   @id @default(uuid())
+  deploymentId String
+  domain       String   @db.VarChar(253)
+  createdAt    DateTime @default(now())
+
+  deployment BotDeployment @relation(fields: [deploymentId], references: [id], onDelete: Cascade)
+
+  @@unique([deploymentId, domain])
+  @@index([deploymentId])
+  @@map("deployment_domains")
+}
+
+model DeploymentEvent {
+  id           String   @id @default(uuid())
+  deploymentId String
+  botId        String
+  workspaceId  String
+  eventType    String   @db.VarChar(40)
+  sessionId    String?  @db.VarChar(64)
+  metadata     Json?
+  createdAt    DateTime @default(now())
+
+  @@index([deploymentId, eventType, createdAt])
+  @@index([botId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("deployment_events")
 }

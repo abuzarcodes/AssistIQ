@@ -264,6 +264,38 @@ export const evictWorkspaceMember = async (
 };
 
 /**
+ * Evict all visitor sockets connected to conversations of a specific bot (Phase 3, CP-3.8).
+ * Called by `unpublishExperience` after status change commits, disconnecting active customer sessions.
+ */
+export const evictBotVisitorSockets = async (botId: string): Promise<number> => {
+  const io = getSocketServer();
+  if (!io) return 0;
+
+  const sockets = await io.fetchSockets();
+  let evicted = 0;
+
+  for (const socket of sockets) {
+    const subscriptions = (socket.data as { subscriptions?: SocketSubscriptions }).subscriptions;
+    if (!subscriptions) continue;
+
+    if (subscriptions.principal.kind === 'visitor' && subscriptions.principal.botId === botId) {
+      for (const room of subscriptions.rooms.keys()) {
+        await socket.leave(room);
+      }
+      subscriptions.rooms.clear();
+      socket.disconnect(true);
+      evicted += 1;
+    }
+  }
+
+  if (evicted > 0) {
+    logger.info({ botId, evicted }, 'Evicted bot visitor sockets on unpublish');
+  }
+
+  return evicted;
+};
+
+/**
  * Detach the server when the HTTP server closes.
  *
  * Without this, an in-process test that attaches, exercises, and closes a realtime listener

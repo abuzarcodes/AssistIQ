@@ -217,6 +217,7 @@ function BotRow({ workspaceId, bot }: { workspaceId: string; bot: Bot }) {
         </p>
 
         <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-1.5">
+          <RowAction href={`${base}/experience`}>Experience</RowAction>
           <RowAction href={`${base}/knowledge`}>Knowledge</RowAction>
           <RowAction href={`${base}/configure`}>Configure</RowAction>
           <RowAction href={`${base}/conversations`}>Conversations</RowAction>

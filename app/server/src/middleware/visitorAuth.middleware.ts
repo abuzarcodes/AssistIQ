@@ -61,7 +61,7 @@ export const authenticateVisitor = (
 
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
-      select: { id: true, botId: true, workspaceId: true },
+      select: { id: true, botId: true, workspaceId: true, deploymentId: true },
     });
 
     if (!conversation) {
@@ -71,6 +71,23 @@ export const authenticateVisitor = (
     // Tenancy: the row, not the token, decides whether this token still describes it.
     if (conversation.botId !== claims.botId || conversation.workspaceId !== claims.workspaceId) {
       throw new NotFoundError('Conversation not found');
+    }
+
+    // Deployment epoch check (Phase 3, CP-3.7):
+    // If conversation was initiated through a deployment, verify deployment status and publishEpoch.
+    if (conversation.deploymentId) {
+      const deployment = await prisma.botDeployment.findUnique({
+        where: { id: conversation.deploymentId },
+        select: { status: true, enabled: true, publishEpoch: true },
+      });
+
+      if (!deployment || deployment.status === 'UNPUBLISHED') {
+        throw new NotFoundError('Conversation not found');
+      }
+
+      if (claims.publishEpoch !== undefined && claims.publishEpoch !== deployment.publishEpoch) {
+        throw new NotFoundError('Conversation not found');
+      }
     }
 
     // Identity only — never lifecycle state. `status` in particular is deliberately absent:

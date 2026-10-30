@@ -16,6 +16,8 @@ import { knowledgeCreateListRouter } from './knowledge.routes.js';
 import { knowledgeSourceCreateListRouter } from './knowledgeSource.routes.js';
 import { knowledgeChunkCreateListRouter, knowledgeTestRouter } from './knowledgeChunk.routes.js';
 import { conversationCreateListRouter } from './conversation.routes.js';
+import { experienceRouter } from './experience.routes.js';
+import { deploymentRouter } from './deployment.routes.js';
 
 /**
  * Nested under /workspaces/:workspaceId/bots (mergeParams exposes :workspaceId).
@@ -157,5 +159,7 @@ router.use('/:botId/knowledge-chunks', knowledgeChunkCreateListRouter);
 // rather than a member of either.
 router.use('/:botId/knowledge-test', knowledgeTestRouter);
 router.use('/:botId/conversations', conversationCreateListRouter);
+router.use('/:botId/experience', experienceRouter);
+router.use('/:botId/deployments', deploymentRouter);
 
 export default router;

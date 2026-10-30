@@ -22,6 +22,7 @@ import { PERMISSIONS, hasPermission } from '../constants/permissions.js';
 import { emitConversationEvent, emitMessageCreated, emitQueueUpdated } from '../realtime/events.js';
 import type { WorkspaceRole } from '@prisma/client';
 import type { EscalationInfo, ResolvedBotConfig, SourceRef } from '../types/botConfig.types.js';
+import { recordEvent } from './analytics.service.js';
 
 /** Create a conversation under a bot in a workspace the caller belongs to. */
 export const createConversation = async (
@@ -971,6 +972,26 @@ const commitTransition = async (params: {
         },
       });
 
+      if (updated.deploymentId) {
+        if (
+          eventType === ConversationEventType.ESCALATED ||
+          updated.status === ConversationStatus.WAITING_FOR_HUMAN
+        ) {
+          void recordEvent(updated.deploymentId, 'human_handoff', undefined, { conversationId }).catch(() => {});
+        } else if (
+          eventType === ConversationEventType.RESOLVED ||
+          updated.status === ConversationStatus.RESOLVED
+        ) {
+          void recordEvent(updated.deploymentId, 'conversation_resolved', undefined, { conversationId }).catch(() => {});
+          if (
+            updated.assignedAgentId === null &&
+            (metadata as any)?.previousStatus === ConversationStatus.ACTIVE
+          ) {
+            void recordEvent(updated.deploymentId, 'ai_resolved', undefined, { conversationId }).catch(() => {});
+          }
+        }
+      }
+
       return updated;
     });
   } catch (err) {
@@ -1461,7 +1482,10 @@ export interface PublicConversationStart {
  * The conversation is created with its `visitorSessionHash` in the same insert, so there is
  * no window in which a conversation exists that no visitor can ever legitimately claim.
  */
-export const startPublicConversation = async (botId: string): Promise<PublicConversationStart> => {
+export const startPublicConversation = async (
+  botId: string,
+  deploymentId?: string
+): Promise<PublicConversationStart> => {
   const bot = await prisma.bot.findUnique({
     where: { id: botId },
     select: { id: true, workspaceId: true, isActive: true },
@@ -1471,15 +1495,51 @@ export const startPublicConversation = async (botId: string): Promise<PublicConv
     throw new NotFoundError('Bot not found');
   }
 
+  // Deployment gating & attribution (Phase 3, CP-3.4, CP-3.5)
+  let activeDeployment: { id: string; publishEpoch: number } | null = null;
+  if (deploymentId) {
+    const matched = await prisma.botDeployment.findFirst({
+      where: {
+        id: deploymentId,
+        botId,
+        status: 'PUBLISHED',
+        enabled: true,
+      },
+      select: { id: true, publishEpoch: true },
+    });
+    if (!matched) {
+      throw new NotFoundError('Deployment not found or not published');
+    }
+    activeDeployment = matched;
+  } else {
+    const anyPublished = await prisma.botDeployment.findFirst({
+      where: {
+        botId,
+        status: 'PUBLISHED',
+        enabled: true,
+      },
+      select: { id: true, publishEpoch: true },
+    });
+    if (!anyPublished) {
+      throw new NotFoundError('Bot has no active published deployment');
+    }
+    activeDeployment = anyPublished;
+  }
+
   const sessionSecret = randomBytes(VISITOR_SESSION_SECRET_BYTES).toString('hex');
 
   const conversation = await prisma.conversation.create({
     data: {
       botId: bot.id,
       workspaceId: bot.workspaceId,
+      deploymentId: activeDeployment.id,
       visitorSessionHash: sha256Hex(sessionSecret),
     },
   });
+
+  void recordEvent(activeDeployment.id, 'conversation_created', undefined, {
+    conversationId: conversation.id,
+  }).catch(() => {});
 
   return {
     conversation,
@@ -1487,6 +1547,7 @@ export const startPublicConversation = async (botId: string): Promise<PublicConv
       conversationId: conversation.id,
       botId: bot.id,
       workspaceId: bot.workspaceId,
+      publishEpoch: activeDeployment.publishEpoch,
     }),
     sessionSecret,
   };
@@ -1526,6 +1587,7 @@ export const refreshVisitorSession = async (
       id: true,
       botId: true,
       workspaceId: true,
+      deploymentId: true,
       status: true,
       visitorSessionHash: true,
     },
@@ -1547,11 +1609,24 @@ export const refreshVisitorSession = async (
     throw new ForbiddenError('This conversation is closed');
   }
 
+  let publishEpoch = 0;
+  if (conversation.deploymentId) {
+    const deployment = await prisma.botDeployment.findUnique({
+      where: { id: conversation.deploymentId },
+      select: { status: true, enabled: true, publishEpoch: true },
+    });
+    if (!deployment || deployment.status === 'UNPUBLISHED') {
+      throw new NotFoundError('Conversation not found');
+    }
+    publishEpoch = deployment.publishEpoch;
+  }
+
   return {
     visitorToken: signVisitorToken({
       conversationId: conversation.id,
       botId: conversation.botId,
       workspaceId: conversation.workspaceId,
+      publishEpoch,
     }),
   };
 };

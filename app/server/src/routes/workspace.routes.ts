@@ -4,6 +4,8 @@ import { requireWorkspacePermission } from '../middleware/authorization.middlewa
 import { PERMISSIONS } from '../constants/permissions.js';
 import { createWorkspaceSchema, workspaceIdParamSchema } from '../schemas/workspace.schema.js';
 import * as workspaceController from '../controllers/workspace.controller.js';
+import * as analyticsController from '../controllers/analytics.controller.js';
+import { analyticsQuerySchema } from '../schemas/analytics.schema.js';
 import { botCreateListRouter } from './bot.routes.js';
 import { workspaceMemberRouter } from './workspaceMember.routes.js';
 import { workspaceConversationRouter } from './conversation.routes.js';
@@ -20,6 +22,16 @@ router.get(
   validate({ params: workspaceIdParamSchema }),
   requireWorkspacePermission(PERMISSIONS.WORKSPACE_VIEW),
   workspaceController.getWorkspace
+);
+
+/**
+ * GET /workspaces/:workspaceId/analytics/deployments — Workspace deployment analytics breakdown (CP-5.6)
+ */
+router.get(
+  '/:workspaceId/analytics/deployments',
+  validate({ params: workspaceIdParamSchema, query: analyticsQuerySchema }),
+  requireWorkspacePermission(PERMISSIONS.WORKSPACE_VIEW),
+  analyticsController.getWorkspaceAnalytics
 );
 
 // Member management (members:view / members:manage enforced inside).

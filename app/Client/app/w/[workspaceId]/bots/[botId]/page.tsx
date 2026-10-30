@@ -248,7 +248,12 @@ export default function WorkspaceBotPage() {
         >
           Work with this bot
         </h2>
-        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <div className="mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <DestinationCard
+            href={`${base}/experience`}
+            title="Experience"
+            description="Design, preview, publish and deploy the customer chat."
+          />
           <DestinationCard
             href={`${base}/knowledge`}
             title="Knowledge"

@@ -24,6 +24,7 @@ import {
   sendPublicMessage,
   refreshVisitorToken,
   submitPublicContact,
+  recordDeploymentEvent,
   getStoredSession,
   setStoredSession,
   clearStoredSession,
@@ -31,6 +32,11 @@ import {
   type PublicConversation,
   PublicApiError,
 } from '@/lib/api/publicChat';
+import type { ExperienceConfigSnapshot } from '@/lib/api/experience';
+import {
+  useExperienceTone,
+  experienceChatColors,
+} from './experience-theme';
 
 interface CustomerChatWidgetProps {
   botId: string;
@@ -39,6 +45,19 @@ interface CustomerChatWidgetProps {
   standalone?: boolean;
   onClose?: () => void;
   className?: string;
+  /**
+   * The published experience snapshot (Phase 11). When present the chat renders
+   * the customer's branding — colours, name, welcome copy, footer — instead of
+   * the dashboard defaults. Absent means the legacy widget exactly as before.
+   */
+  experienceConfig?: ExperienceConfigSnapshot | null;
+  /** The deployment serving this chat; enables page_view/chat_start events. */
+  deploymentId?: string | null;
+  /**
+   * Collapse control for embedded panels. Standalone mode hides its minimize
+   * button, so the iframe shell passes this to offer a close affordance.
+   */
+  onCollapse?: () => void;
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5000/api/v1';
@@ -51,8 +70,13 @@ export function CustomerChatWidget({
   standalone = false,
   onClose,
   className = '',
+  experienceConfig = null,
+  deploymentId = null,
+  onCollapse,
 }: CustomerChatWidgetProps) {
-  const [isOpen, setIsOpen] = useState(defaultOpen || standalone);
+  const [isOpen, setIsOpen] = useState(
+    defaultOpen || standalone || experienceConfig?.autoOpen === true,
+  );
   const [initializing, setInitializing] = useState(true);
   const [conversation, setConversation] = useState<PublicConversation | null>(null);
   const [visitorToken, setVisitorToken] = useState<string | null>(null);
@@ -71,6 +95,43 @@ export function CustomerChatWidget({
   const [contactEmail, setContactEmail] = useState('');
   const [contactSubmitting, setContactSubmitting] = useState(false);
   const [contactSaved, setContactSaved] = useState(false);
+
+  // --- Experience theming (CP-11.3 – CP-11.6) ----------------------------------
+  //
+  // Everything below is inert when `experienceConfig` is absent: every colour,
+  // copy string and footer link falls back to the pre-experience rendering, so
+  // `/widget/[botId]` behaves exactly as it always has.
+  const exp = experienceConfig ?? null;
+  const tone = useExperienceTone(exp?.themeMode ?? 'system');
+  const colors = exp ? experienceChatColors(exp, tone) : null;
+
+  const displayName = exp?.displayName || botName;
+  const welcomeMessage = exp?.welcomeMessage || 'Hi there! How can we help?';
+  const welcomeSubtitle =
+    exp?.welcomeSubtitle ||
+    'Ask any question and our AI assistant or support team will assist you.';
+  const suggestedQuestions = exp?.suggestedQuestions ?? [];
+  const showWelcome = !exp || exp.firstOpenBehavior !== 'empty';
+
+  // Client analytics (page_view on mount, chat_start on the first sent message).
+  // Best-effort by design: a blocked analytics request must never break the chat.
+  const eventsSentRef = useRef({ pageView: false, chatStart: false });
+  useEffect(() => {
+    if (!deploymentId || eventsSentRef.current.pageView) return;
+    eventsSentRef.current.pageView = true;
+    recordDeploymentEvent(deploymentId, { eventType: 'page_view' }).catch(
+      () => {},
+    );
+  }, [deploymentId]);
+
+  function emitChatStart(sessionId: string) {
+    if (!deploymentId || eventsSentRef.current.chatStart) return;
+    eventsSentRef.current.chatStart = true;
+    recordDeploymentEvent(deploymentId, {
+      eventType: 'chat_start',
+      sessionId,
+    }).catch(() => {});
+  }
 
   const socketRef = useRef<Socket | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -412,6 +473,8 @@ export function CustomerChatWidget({
             : null,
         );
       }
+
+      emitChatStart(conversation.id);
     } catch (err) {
       setIsTyping(false);
       // Remove failed message
@@ -449,12 +512,41 @@ export function CustomerChatWidget({
   const isHumanActive = conversation?.status === 'HUMAN_ACTIVE';
   const isResolved = conversation?.status === 'RESOLVED';
 
+  // Launcher corner and panel size come from the published config when present.
+  const launcherPosition =
+    !exp || exp.widgetPosition === 'bottom-right'
+      ? 'bottom-5 right-5'
+      : exp.widgetPosition === 'bottom-left'
+        ? 'bottom-5 left-5'
+        : exp.widgetPosition === 'top-right'
+          ? 'top-5 right-5'
+          : 'top-5 left-5';
+  const launcherAlign =
+    !exp || exp.widgetPosition?.endsWith('right') ? 'items-end' : 'items-start';
+  const panelStyle =
+    exp && !standalone
+      ? {
+          width: exp.widgetPanelWidth,
+          height: exp.widgetPanelHeight,
+          maxWidth: '92vw',
+          maxHeight: '85vh',
+        }
+      : undefined;
+  const launcherLabel = exp?.widgetLauncherLabel || null;
+
+  function formatTime(iso: string): string {
+    const date = new Date(iso);
+    return Number.isNaN(date.getTime())
+      ? ''
+      : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  }
+
   return (
     <div
       className={
         standalone
           ? 'w-full h-full flex flex-col bg-background'
-          : `fixed bottom-5 right-5 z-50 flex flex-col items-end ${className}`
+          : `fixed ${launcherPosition} z-50 flex flex-col ${launcherAlign} ${className}`
       }
     >
       {/* Floating launcher button when minimized */}
@@ -466,9 +558,19 @@ export function CustomerChatWidget({
             setIsOpen(true);
           }}
           aria-label="Open chat support"
-          className="relative h-14 w-14 rounded-full bg-accent text-accent-foreground shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 flex items-center justify-center cursor-pointer group"
+          style={
+            colors
+              ? { backgroundColor: colors.accent, color: colors.accentInk }
+              : undefined
+          }
+          className={
+            launcherLabel
+              ? 'relative flex items-center gap-2 rounded-full py-3 pl-4 pr-5 text-sm font-medium shadow-lg hover:shadow-xl hover:opacity-90 transition-all duration-200 cursor-pointer'
+              : 'relative h-14 w-14 rounded-full bg-accent text-accent-foreground shadow-lg hover:shadow-xl hover:scale-105 transition-all duration-200 flex items-center justify-center cursor-pointer group'
+          }
         >
           <MessageSquare className="h-6 w-6 transition-transform group-hover:scale-110" />
+          {launcherLabel}
           {unreadCount > 0 && (
             <span className="absolute -top-1 -right-1 h-5 w-5 rounded-full bg-destructive text-destructive-foreground text-[11px] font-bold flex items-center justify-center shadow-md animate-scale-in">
               {unreadCount}
@@ -480,6 +582,12 @@ export function CustomerChatWidget({
       {/* Main chat window */}
       {(isOpen || standalone) && (
         <div
+          style={{
+            ...(colors
+              ? { backgroundColor: colors.ground, borderColor: colors.border }
+              : undefined),
+            ...(panelStyle ?? undefined),
+          }}
           className={
             standalone
               ? 'flex flex-col flex-1 w-full max-w-2xl mx-auto rounded-2xl border border-border bg-card shadow-sm overflow-hidden'
@@ -487,12 +595,31 @@ export function CustomerChatWidget({
           }
         >
           {/* Header */}
-          <header className="px-4 py-3 bg-card border-b border-border flex items-center justify-between shrink-0">
+          <header
+            style={
+              colors
+                ? {
+                    backgroundColor: colors.ground,
+                    borderColor: colors.border,
+                  }
+                : undefined
+            }
+            className="px-4 py-3 bg-card border-b border-border flex items-center justify-between shrink-0"
+          >
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="relative">
-                <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center">
-                  <Bot className="h-4 w-4 text-accent-strong" />
-                </div>
+                {exp?.businessLogoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- a business-supplied remote URL is not known at build time.
+                  <img
+                    src={exp.businessLogoUrl}
+                    alt={`${displayName} logo`}
+                    className="h-8 w-8 rounded-full object-cover bg-muted"
+                  />
+                ) : (
+                  <div className="h-8 w-8 rounded-full bg-accent/15 flex items-center justify-center">
+                    <Bot className="h-4 w-4 text-accent-strong" />
+                  </div>
+                )}
                 <span
                   className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-card ${
                     socketConnected ? 'bg-success' : 'bg-muted-foreground'
@@ -502,7 +629,7 @@ export function CustomerChatWidget({
 
               <div className="min-w-0">
                 <h3 className="text-sm font-semibold text-foreground truncate">
-                  {botName}
+                  {displayName}
                 </h3>
                 <p className="text-[11px] text-muted-foreground flex items-center gap-1">
                   {socketConnected ? (
@@ -532,6 +659,16 @@ export function CustomerChatWidget({
                   className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
                 >
                   <Minimize2 className="h-4 w-4" />
+                </button>
+              )}
+              {standalone && onCollapse && (
+                <button
+                  type="button"
+                  onClick={onCollapse}
+                  aria-label="Close chat"
+                  className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-muted transition-colors cursor-pointer"
+                >
+                  <X className="h-4 w-4" />
                 </button>
               )}
             </div>
@@ -635,7 +772,10 @@ export function CustomerChatWidget({
           )}
 
           {/* Chat transcript thread */}
-          <div className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-background">
+          <div
+            style={colors ? { backgroundColor: colors.ground } : undefined}
+            className="flex-1 overflow-y-auto p-3.5 space-y-3 bg-background"
+          >
             {initializing ? (
               <div className="flex flex-col items-center justify-center h-full text-center py-8">
                 <div className="h-8 w-8 rounded-full border-2 border-accent border-t-transparent animate-spin mb-2" />
@@ -646,10 +786,40 @@ export function CustomerChatWidget({
                 <div className="h-10 w-10 rounded-full bg-muted flex items-center justify-center mb-2">
                   <Sparkles className="h-5 w-5 text-accent-strong" />
                 </div>
-                <p className="text-xs font-semibold text-foreground">Hi there! How can we help?</p>
-                <p className="text-[11px] text-muted-foreground mt-1 max-w-xs">
-                  Ask any question and our AI assistant or support team will assist you.
-                </p>
+                {showWelcome ? (
+                  <>
+                    <p className="text-xs font-semibold text-foreground">{welcomeMessage}</p>
+                    <p className="text-[11px] text-muted-foreground mt-1 max-w-xs">
+                      {welcomeSubtitle}
+                    </p>
+                    {suggestedQuestions.length > 0 && (
+                      <div className="mt-3 flex flex-wrap justify-center gap-1.5 max-w-xs">
+                        {suggestedQuestions.map((question) => (
+                          <button
+                            key={question}
+                            type="button"
+                            onClick={() => setInputText(question)}
+                            style={
+                              colors
+                                ? {
+                                    borderColor: colors.accent,
+                                    color: colors.accent,
+                                  }
+                                : undefined
+                            }
+                            className="max-w-full truncate rounded-full border border-border px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer"
+                          >
+                            {question}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="text-[11px] text-muted-foreground mt-1 max-w-xs">
+                    Send a message to start the conversation.
+                  </p>
+                )}
               </div>
             ) : (
               messages.map((m) => {
@@ -675,12 +845,25 @@ export function CustomerChatWidget({
                       )}
                       <span className="text-[10px] font-medium text-muted-foreground">
                         {isUser && 'You'}
-                        {isAssistant && botName}
+                        {isAssistant && displayName}
                         {isAgent && 'Support Specialist'}
                       </span>
                     </div>
 
                     <div
+                      style={
+                        colors && isUser
+                          ? {
+                              backgroundColor: colors.userBubble,
+                              color: colors.userInk,
+                            }
+                          : colors && isAssistant
+                            ? {
+                                backgroundColor: colors.botBubble,
+                                color: colors.botInk,
+                              }
+                            : undefined
+                      }
                       className={`max-w-[85%] rounded-2xl px-3.5 py-2 text-xs transition-all ${
                         isUser
                           ? 'bg-accent text-accent-foreground rounded-tr-xs'
@@ -697,6 +880,12 @@ export function CustomerChatWidget({
                         <ReactMarkdown remarkPlugins={[remarkGfm]}>{m.content}</ReactMarkdown>
                       </div>
                     </div>
+
+                    {exp?.showTimestamps && m.createdAt && (
+                      <span className="px-1 text-[10px] text-muted-foreground">
+                        {formatTime(m.createdAt)}
+                      </span>
+                    )}
 
                     {/* Sources citation disclosure */}
                     {isAssistant && m.sources && m.sources.length > 0 && (
@@ -724,6 +913,14 @@ export function CustomerChatWidget({
           {/* Footer composer */}
           <form
             onSubmit={handleSendMessage}
+            style={
+              colors
+                ? {
+                    backgroundColor: colors.ground,
+                    borderColor: colors.border,
+                  }
+                : undefined
+            }
             className="p-2.5 bg-card border-t border-border flex items-center gap-2 shrink-0"
           >
             <input
@@ -731,7 +928,10 @@ export function CustomerChatWidget({
               type="text"
               value={inputText}
               onChange={(e) => setInputText(e.target.value)}
-              placeholder={isResolved ? 'Send a message to reopen...' : 'Type a message...'}
+              placeholder={
+                exp?.inputPlaceholder ||
+                (isResolved ? 'Send a message to reopen...' : 'Type a message...')
+              }
               disabled={initializing || sending}
               className="flex-1 px-3 py-2 rounded-xl border border-border bg-background text-xs text-foreground placeholder:text-muted-foreground focus:outline-hidden focus:border-accent focus:ring-1 focus:ring-accent transition-all disabled:opacity-50"
             />
@@ -739,11 +939,48 @@ export function CustomerChatWidget({
               type="submit"
               disabled={!inputText.trim() || sending || initializing}
               aria-label="Send message"
+              style={
+                colors
+                  ? { backgroundColor: colors.accent, color: colors.accentInk }
+                  : undefined
+              }
               className="h-8 w-8 rounded-xl bg-accent text-accent-foreground flex items-center justify-center transition-all disabled:opacity-40 hover:opacity-90 cursor-pointer shrink-0 shadow-xs"
             >
               <Send className="h-3.5 w-3.5" />
             </button>
           </form>
+
+          {/* Experience footer: policy links and credit (CP-11.5, CP-11.6) */}
+          {exp && (exp.showBranding || exp.privacyPolicyUrl || exp.termsUrl) && (
+            <div
+              style={colors ? { borderColor: colors.border } : undefined}
+              className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-t border-border bg-card px-3.5 py-2 text-[10px] text-muted-foreground"
+            >
+              {exp.privacyPolicyUrl && (
+                <a
+                  href={exp.privacyPolicyUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground hover:underline"
+                >
+                  Privacy
+                </a>
+              )}
+              {exp.termsUrl && (
+                <a
+                  href={exp.termsUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground hover:underline"
+                >
+                  Terms
+                </a>
+              )}
+              {exp.showBranding && (
+                <span className="ml-auto">Powered by AssistIQ</span>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -72,6 +72,7 @@ export interface VisitorTokenPayload {
   botId: string;
   workspaceId: string;
   role: 'CUSTOMER';
+  publishEpoch?: number;
 }
 
 /**
@@ -87,6 +88,7 @@ export const signVisitorToken = (input: {
   conversationId: string;
   botId: string;
   workspaceId: string;
+  publishEpoch?: number;
 }): string =>
   jwt.sign(
     {
@@ -95,6 +97,7 @@ export const signVisitorToken = (input: {
       botId: input.botId,
       workspaceId: input.workspaceId,
       role: 'CUSTOMER',
+      publishEpoch: input.publishEpoch ?? 0,
     },
     env.JWT_SECRET,
     { expiresIn: VISITOR_TOKEN_TTL as SignOptions['expiresIn'] }
@@ -144,6 +147,7 @@ export const verifyVisitorToken = (
       botId: raw.botId,
       workspaceId: raw.workspaceId,
       role: 'CUSTOMER',
+      publishEpoch: typeof raw.publishEpoch === 'number' ? raw.publishEpoch : undefined,
     };
   } catch (error) {
     if (error instanceof AuthenticationError) throw error;

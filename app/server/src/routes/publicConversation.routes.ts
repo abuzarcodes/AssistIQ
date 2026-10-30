@@ -12,6 +12,13 @@ import {
 } from '../schemas/conversation.schema.js';
 import { conversationContactSchema } from '../schemas/botConfig.schema.js';
 import * as publicConversationController from '../controllers/publicConversation.controller.js';
+import * as publicDeploymentController from '../controllers/publicDeployment.controller.js';
+import {
+  deploymentIdParamSchema,
+  deploymentSlugParamSchema,
+} from '../schemas/experience.schema.js';
+import * as analyticsController from '../controllers/analytics.controller.js';
+import { clientEventSchema } from '../schemas/analytics.schema.js';
 
 /**
  * The public conversation surface (`HUMAN_ESCALATION_IMPLEMENTATION_PLAN.md` §10, §14).
@@ -43,6 +50,21 @@ const startConversationLimiter = rateLimit({
     success: false,
     error: 'Too many conversations started. Please try again later.',
     message: 'Too many conversations started. Please try again later.',
+  },
+});
+
+/**
+ * Deployment configuration rate limiter (CP-3.2): 60/min per IP.
+ */
+const deploymentConfigLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many requests. Please slow down.',
+    message: 'Too many requests. Please slow down.',
   },
 });
 
@@ -140,6 +162,44 @@ router.post(
   validate({ params: conversationIdParamSchema, body: conversationContactSchema }),
   authenticateVisitor(),
   publicConversationController.submitContact
+);
+
+// --- Public deployment configuration (Phase 3, CP-3.2, CP-3.3) -------------------------
+
+/**
+ * Public client events rate limiter (CP-5.4): 30/min per IP.
+ */
+const deploymentEventsLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 30,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    success: false,
+    error: 'Too many events submitted. Please slow down.',
+    message: 'Too many events submitted. Please slow down.',
+  },
+});
+
+router.get(
+  '/deployments/:deploymentId/config',
+  deploymentConfigLimiter,
+  validate({ params: deploymentIdParamSchema }),
+  publicDeploymentController.getDeploymentConfig
+);
+
+router.get(
+  '/deployments/slug/:slug/config',
+  deploymentConfigLimiter,
+  validate({ params: deploymentSlugParamSchema }),
+  publicDeploymentController.getDeploymentConfigBySlug
+);
+
+router.post(
+  '/deployments/:deploymentId/events',
+  deploymentEventsLimiter,
+  validate({ params: deploymentIdParamSchema, body: clientEventSchema }),
+  analyticsController.recordClientEvent
 );
 
 export default router;
